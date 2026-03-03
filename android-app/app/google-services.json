@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "361144532925",
+    "firebase_url": "https://iot-alarm-app-76e4b-default-rtdb.europe-west1.firebasedatabase.app",
+    "project_id": "iot-alarm-app-76e4b",
+    "storage_bucket": "iot-alarm-app-76e4b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:361144532925:android:4b904aaf8f71d32eb65cd4",
+        "android_client_info": {
+          "package_name": "com.example.assignment1gr01"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAvN44uaAW3DcqDGHCMFnHPeUcUbfFTX5I"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
