@@ -1,11 +1,5 @@
-// Motor control pins
-#define IN1 A0
-#define IN2 A1
-#define IN3 A2
-#define IN4 A3
-// Speed control pins (PWM)
-#define ENA 5
-#define ENB 6
+#include "motor_control.h"
+
 
 void motor_init() {
   // Set motor control pins as outputs
@@ -23,6 +17,18 @@ void motor_forward(uint8_t speed) {
   // Set motor direction to forward
   digitalWrite(IN1, HIGH);
   digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, HIGH);
+  
+  // Set motor speed
+  analogWrite(ENA, speed);
+  analogWrite(ENB, speed);
+}
+
+void motor_backward(uint8_t speed) {
+  // Set motor direction to backward
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
   digitalWrite(IN3, HIGH);
   digitalWrite(IN4, LOW);
   
@@ -34,9 +40,9 @@ void motor_forward(uint8_t speed) {
 void motor_turn_left(uint8_t speed) {
   // Set motor direction to turn left
   digitalWrite(IN1, LOW);
-  digitalWrite(IN2, HIGH);
-  digitalWrite(IN3, HIGH);
-  digitalWrite(IN4, LOW);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, HIGH);
   
   // Set motor speed
   analogWrite(ENA, speed);
@@ -48,7 +54,7 @@ void motor_turn_right(uint8_t speed) {
   digitalWrite(IN1, HIGH);
   digitalWrite(IN2, LOW);
   digitalWrite(IN3, LOW);
-  digitalWrite(IN4, HIGH);
+  digitalWrite(IN4, LOW);
   
   // Set motor speed
   analogWrite(ENA, speed);
