@@ -30,6 +30,11 @@ void loop() {
             break;
         case MODE_SENTRY:
             // Logic for autonomous driving
+            if(get_distance() > DISTANCE_LIMIT_CM) {
+                motor_forward(speed);
+            } else {
+                motor_turn_right(speed);
+            }
             break;
         case MODE_STANDBY:
             // Listen to commands from ESP32

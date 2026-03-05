@@ -9,6 +9,8 @@
 // Speed control pins (PWM)
 #define ENA 5
 #define ENB 6
+// Constants
+#define DISTANCE_LIMIT_CM 20 
 
 // Motor control functions
 void motor_init(void);
@@ -17,3 +19,6 @@ void motor_backward(uint8_t speed);
 void motor_turn_left(uint8_t speed);
 void motor_turn_right(uint8_t speed);
 void motor_stop();
+
+// Perception
+float get_distance(void);
