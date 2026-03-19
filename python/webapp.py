@@ -31,7 +31,7 @@ app.layout = html.Div(style={'backgroundColor': '#121212', 'color': 'white', 'fo
     html.H1("ALPHABOT MISSION CONTROL", style={'borderBottom': '2px solid #00e676', 'paddingBottom': '10px'}),
     
     # Live-Stream der Kamera
-    html.Img(id='camera-feed', src=f"http://{BOT_IP}:81/stream", style={'width': '100%', 'maxWidth': '500px', 'borderRadius': '10px', 'border': '2px solid #00e676'}),
+    html.Img(id='camera-feed', src=f"http://{BOT_IP}:81/stream", style={'width': '100%', 'maxWidth': '500px', 'borderRadius': '10px', 'border': '2px solid #00e676', 'transform': 'rotate(180deg)'}),
     html.Div(
         id='camera-status',
         children='Kamera: stream wird initialisiert...',

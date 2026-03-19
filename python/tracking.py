@@ -10,10 +10,23 @@ from mediapipe.tasks.python import vision
 
 # --- CONFIG ---
 BOT_IP = "192.168.1.108"
-DEADZONE = 0.15
+
+# Follow behavior
+TURN_SPEED = 65
+FORWARD_SPEED = 60
+CENTER_DEADZONE = 0.12
+DIST_NEAR = 0.22
+DIST_FAR = 0.12
+
+# Smoothing (0..1): higher = reacts faster
+SMOOTH_ALPHA = 0.2
+
+# Command rate limiting
+CMD_MIN_INTERVAL_S = 0.1
 
 STREAM_URL = f"http://{BOT_IP}:81/stream"
 SNAPSHOT_URL = f"http://{BOT_IP}/capture"
+CMD_URL = f"http://{BOT_IP}/cmd"
 MODEL_DIR = Path(__file__).resolve().parent / "models"
 MODEL_PATH = MODEL_DIR / "pose_landmarker_lite.task"
 MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
@@ -78,6 +91,30 @@ def build_landmarker() -> vision.PoseLandmarker:
     return vision.PoseLandmarker.create_from_options(options)
 
 
+class BotController:
+    def __init__(self) -> None:
+        self.last_cmd = ""
+        self.last_sent_at = 0.0
+
+    def send(self, cmd: str, force: bool = False) -> bool:
+        now = time.time()
+
+        if not force:
+            if cmd == self.last_cmd and (now - self.last_sent_at) < CMD_MIN_INTERVAL_S:
+                return True
+
+        try:
+            response = requests.get(CMD_URL, params={"p": cmd}, timeout=0.15)
+            if response.ok:
+                self.last_cmd = cmd
+                self.last_sent_at = now
+                return True
+        except requests.RequestException:
+            return False
+
+        return False
+
+
 def draw_pose(frame, landmarks) -> None:
     height, width = frame.shape[:2]
     points = []
@@ -93,15 +130,58 @@ def draw_pose(frame, landmarks) -> None:
             cv2.line(frame, points[start], points[end], (255, 180, 0), 2)
 
 
+def smooth_value(current: float | None, new_value: float) -> float:
+    if current is None:
+        return new_value
+    return (1.0 - SMOOTH_ALPHA) * current + SMOOTH_ALPHA * new_value
+
+
+def compute_shoulder_width(landmarks) -> float | None:
+    if len(landmarks) <= 12:
+        return None
+
+    left = landmarks[11]
+    right = landmarks[12]
+    dx = left.x - right.x
+    dy = left.y - right.y
+    width = (dx * dx + dy * dy) ** 0.5
+    return width
+
+
+def choose_command(error: float, shoulder_width: float) -> tuple[str, str]:
+    if shoulder_width > DIST_NEAR:
+        if error < -CENTER_DEADZONE:
+            return f"ML{TURN_SPEED}", "zu nah -> links ausrichten"
+        if error > CENTER_DEADZONE:
+            return f"MR{TURN_SPEED}", "zu nah -> rechts ausrichten"
+        return "MS", "zu nah -> stop"
+
+    if shoulder_width < DIST_FAR:
+        if error < -CENTER_DEADZONE:
+            return f"ML{TURN_SPEED}", "zu weit -> links drehen"
+        if error > CENTER_DEADZONE:
+            return f"MR{TURN_SPEED}", "zu weit -> rechts drehen"
+        return f"MF{FORWARD_SPEED}", "zu weit -> langsam vorwaerts"
+
+    if error < -CENTER_DEADZONE:
+        return f"ML{TURN_SPEED}", "ok dist -> links ausrichten"
+    if error > CENTER_DEADZONE:
+        return f"MR{TURN_SPEED}", "ok dist -> rechts ausrichten"
+    return "MS", "ok dist + zentriert -> stop"
+
+
 def main() -> None:
     landmarker = build_landmarker()
+    bot = BotController()
 
     cap = open_stream()
     consecutive_stream_failures = 0
     last_frame_ts = time.time()
     fps = 0.0
+    smoothed_nose_x = None
+    smoothed_shoulder_w = None
 
-    print("Tracking gestartet. Nur Visualisierung aktiv (keine Fahrbefehle).")
+    print("Tracking gestartet. Slow-Follow aktiv.")
     print(f"Primärer Stream: {STREAM_URL}")
     print(f"Fallback Snapshot: {SNAPSHOT_URL}")
 
@@ -137,29 +217,46 @@ def main() -> None:
             else:
                 consecutive_stream_failures = 0
 
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
+
             image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
             result = landmarker.detect(mp_image)
 
+            cmd = "MS"
+            state = "keine pose"
+
             if result.pose_landmarks:
                 landmarks = result.pose_landmarks[0]
                 nose_x = landmarks[0].x
-                error = nose_x - 0.5
+                shoulder_w = compute_shoulder_width(landmarks)
 
-                if error < -DEADZONE:
-                    direction = "links"
-                elif error > DEADZONE:
-                    direction = "rechts"
+                if shoulder_w is not None:
+                    smoothed_nose_x = smooth_value(smoothed_nose_x, nose_x)
+                    smoothed_shoulder_w = smooth_value(smoothed_shoulder_w, shoulder_w)
+                    error = smoothed_nose_x - 0.5
+                    cmd, state = choose_command(error, smoothed_shoulder_w)
+                    status = (
+                        f"POSE | nose_x={smoothed_nose_x:.2f} | err={error:+.2f} "
+                        f"| shoulder={smoothed_shoulder_w:.3f}"
+                    )
                 else:
-                    direction = "mitte"
+                    status = "Pose unvollstaendig (Schulter fehlt)"
+                    state = "ungueltige pose"
+                    cmd = "MS"
 
                 draw_pose(frame, landmarks)
-                status = f"POSE erkannt | nose_x={nose_x:.2f} | error={error:+.2f} | dir={direction}"
             else:
+                cmd = "MS"
+                state = "keine pose -> stop"
                 status = "Keine Pose erkannt"
+
+            bot.send(cmd)
 
             cv2.putText(frame, status, (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             cv2.putText(frame, f"FPS: {fps:.1f}", (10, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 220, 0), 2)
+            cv2.putText(frame, f"STATE: {state}", (10, 101), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (120, 255, 255), 2)
+            cv2.putText(frame, f"CMD: {cmd}", (10, 132), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (120, 255, 255), 2)
 
             cv2.imshow("AlphaBot AI Vision", frame)
 
@@ -167,6 +264,7 @@ def main() -> None:
                 break
 
     finally:
+        bot.send("MS", force=True)
         cap.release()
         cv2.destroyAllWindows()
         landmarker.close()
