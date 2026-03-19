@@ -34,7 +34,7 @@ public class MainActivity extends AppCompatActivity {
 
     // Android emulator reaches host machine via 10.0.2.2
     private static final String TRACKING_STREAM_URL = "http://10.0.2.2:8090/stream.mjpg";
-    private static final String TRACKING_STATUS_URL = "http://10.0.2.2:8090/status.json";
+    private static final String TRACKING_STATUS_URL = "http://10.0.2.2:8091/status.json";
     private static final String FIREBASE_LIGHT_PATH = "bots/alphabot/light_on";
     private static final long STATUS_POLL_MS = 350;
 
@@ -157,15 +157,25 @@ public class MainActivity extends AppCompatActivity {
                 reader.close();
 
                 JSONObject json = new JSONObject(builder.toString());
+                String mode = json.optString("mode", "-");
                 boolean pose = json.optBoolean("pose", false);
                 String state = json.optString("state", "-");
+                double holdTimer = json.optDouble("hold_timer_s", 0.0);
                 String normalizedState = normalizeState(state);
 
                 runOnUiThread(() -> {
-                    trackingStateTextView.setText("Pose: " + (pose ? "JA" : "NEIN") + " | State: " + normalizedState);
+                    String timerPart = holdTimer > 0.0
+                            ? String.format(" | Timer: %.1fs", holdTimer)
+                            : "";
+                    trackingStateTextView.setText(
+                            "Mode: " + mode
+                                    + " | Pose: " + (pose ? "JA" : "NEIN")
+                                    + timerPart
+                                    + " | State: " + normalizedState
+                    );
                 });
             } catch (Exception e) {
-                runOnUiThread(() -> trackingStateTextView.setText("Pose: - | State: offline"));
+                runOnUiThread(() -> trackingStateTextView.setText("Mode: - | Pose: - | State: offline"));
             } finally {
                 if (connection != null) {
                     connection.disconnect();

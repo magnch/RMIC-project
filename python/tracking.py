@@ -32,6 +32,7 @@ SMOOTH_ALPHA = 0.2
 
 # Command rate limiting
 CMD_MIN_INTERVAL_S = 0.1
+TRACKING_SEND_MOTOR_COMMANDS = False
 
 # Video source mode: stream-only (requested)
 VIDEO_SOURCE_MODE = "stream"
@@ -358,6 +359,7 @@ def main() -> None:
     print(f"Relay: http://127.0.0.1:{RELAY_PORT}{RELAY_PATH}")
     print(f"Relay MJPEG: http://127.0.0.1:{RELAY_PORT}{RELAY_MJPEG_PATH}")
     print(f"Relay Status: http://127.0.0.1:{RELAY_PORT}{RELAY_STATUS_PATH}")
+    print(f"Motorsteuerung aktiv: {TRACKING_SEND_MOTOR_COMMANDS}")
 
     try:
         while True:
@@ -405,7 +407,9 @@ def main() -> None:
                 cmd = "MS"
                 state_text = "keine pose -> stop"
 
-            bot.send(cmd)
+            if TRACKING_SEND_MOTOR_COMMANDS:
+                bot.send(cmd)
+
             update_relay_status(
                 pose=bool(result.pose_landmarks),
                 fps=fps,
@@ -424,7 +428,8 @@ def main() -> None:
         mjpeg_reader.close()
         relay_server.shutdown()
         relay_server.server_close()
-        bot.send("MS", force=True)
+        if TRACKING_SEND_MOTOR_COMMANDS:
+            bot.send("MS", force=True)
         cv2.destroyAllWindows()
         landmarker.close()
 
