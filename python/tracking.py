@@ -1,5 +1,8 @@
 import time
+import json
 from pathlib import Path
+from threading import Lock, Thread
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import cv2
 import mediapipe as mp
@@ -30,8 +33,21 @@ SMOOTH_ALPHA = 0.2
 # Command rate limiting
 CMD_MIN_INTERVAL_S = 0.1
 
+# Video source mode: stream-only (requested)
+VIDEO_SOURCE_MODE = "stream"
+NO_FRAME_LOG_INTERVAL_S = 3.0
+STREAM_CONNECT_TIMEOUT_S = 2.0
+STREAM_READ_TIMEOUT_S = 8.0
+
+# Local relay server for Android/web consumers (no Firebase needed)
+RELAY_HOST = "0.0.0.0"
+RELAY_PORT = 8090
+RELAY_PATH = "/frame.jpg"
+RELAY_MJPEG_PATH = "/stream.mjpg"
+RELAY_STATUS_PATH = "/status.json"
+RELAY_JPEG_QUALITY = 70
+
 STREAM_URL = f"http://{BOT_IP}:81/stream"
-SNAPSHOT_URL = f"http://{BOT_IP}/capture"
 CMD_URL = f"http://{BOT_IP}/cmd"
 MODEL_DIR = Path(__file__).resolve().parent / "models"
 MODEL_PATH = MODEL_DIR / "pose_landmarker_lite.task"
@@ -48,6 +64,121 @@ POSE_CONNECTIONS = [
     (23, 25), (25, 27), (27, 29), (29, 31),
     (24, 26), (26, 28), (28, 30), (30, 32),
 ]
+
+_LATEST_FRAME_JPEG = None
+_LATEST_FRAME_LOCK = Lock()
+_LATEST_STATUS = {
+    "pose": False,
+    "fps": 0.0,
+    "state": "init",
+    "cmd": "MS",
+}
+_LATEST_STATUS_LOCK = Lock()
+
+
+class RelayHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        route = self.path.split("?", 1)[0]
+
+        if route == RELAY_MJPEG_PATH:
+            self.serve_mjpeg_stream()
+            return
+
+        if route == RELAY_STATUS_PATH:
+            self.serve_status_json()
+            return
+
+        if route != RELAY_PATH:
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        with _LATEST_FRAME_LOCK:
+            frame_bytes = _LATEST_FRAME_JPEG
+
+        if frame_bytes is None:
+            self.send_response(503)
+            self.end_headers()
+            self.wfile.write(b"no frame yet")
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(frame_bytes)))
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.end_headers()
+        self.wfile.write(frame_bytes)
+
+    def serve_status_json(self):
+        with _LATEST_STATUS_LOCK:
+            payload = dict(_LATEST_STATUS)
+
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def serve_mjpeg_stream(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.end_headers()
+
+        try:
+            while True:
+                with _LATEST_FRAME_LOCK:
+                    frame_bytes = _LATEST_FRAME_JPEG
+
+                if frame_bytes is None:
+                    time.sleep(0.05)
+                    continue
+
+                self.wfile.write(b"--frame\r\n")
+                self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                self.wfile.write(f"Content-Length: {len(frame_bytes)}\r\n\r\n".encode("ascii"))
+                self.wfile.write(frame_bytes)
+                self.wfile.write(b"\r\n")
+                time.sleep(0.08)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        except Exception:
+            return
+
+    def log_message(self, format, *args):
+        return
+
+
+def start_relay_server() -> ThreadingHTTPServer:
+    server = ThreadingHTTPServer((RELAY_HOST, RELAY_PORT), RelayHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server
+
+
+def update_relay_frame(frame) -> None:
+    ok, encoded = cv2.imencode(
+        ".jpg",
+        frame,
+        [int(cv2.IMWRITE_JPEG_QUALITY), RELAY_JPEG_QUALITY],
+    )
+    if not ok:
+        return
+
+    frame_bytes = encoded.tobytes()
+    with _LATEST_FRAME_LOCK:
+        global _LATEST_FRAME_JPEG
+        _LATEST_FRAME_JPEG = frame_bytes
+
+
+def update_relay_status(*, pose: bool, fps: float, state: str, cmd: str) -> None:
+    with _LATEST_STATUS_LOCK:
+        _LATEST_STATUS["pose"] = pose
+        _LATEST_STATUS["fps"] = round(float(fps), 1)
+        _LATEST_STATUS["state"] = state
+        _LATEST_STATUS["cmd"] = cmd
 
 
 def ensure_model() -> Path:
@@ -67,21 +198,72 @@ def ensure_model() -> Path:
     return MODEL_PATH
 
 
-def open_stream() -> cv2.VideoCapture:
-    cap = cv2.VideoCapture(STREAM_URL)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    return cap
+class MjpegStreamReader:
+    def __init__(self, url: str):
+        self.url = url
+        self.response = None
+        self.byte_iter = None
+        self.buffer = bytearray()
 
+    def connect(self) -> bool:
+        self.close()
+        try:
+            self.response = requests.get(
+                self.url,
+                stream=True,
+                timeout=(STREAM_CONNECT_TIMEOUT_S, STREAM_READ_TIMEOUT_S),
+            )
+            self.response.raise_for_status()
+            self.byte_iter = self.response.iter_content(chunk_size=4096)
+            self.buffer.clear()
+            return True
+        except requests.RequestException:
+            self.close()
+            return False
 
-def fetch_snapshot_frame() -> np.ndarray | None:
-    try:
-        response = requests.get(SNAPSHOT_URL, timeout=0.6)
-        response.raise_for_status()
-        image_data = np.frombuffer(response.content, dtype=np.uint8)
-        frame = cv2.imdecode(image_data, cv2.IMREAD_COLOR)
-        return frame
-    except requests.RequestException:
-        return None
+    def read_frame(self) -> np.ndarray | None:
+        if self.byte_iter is None:
+            if not self.connect():
+                return None
+
+        try:
+            for chunk in self.byte_iter:
+                if not chunk:
+                    continue
+
+                self.buffer.extend(chunk)
+
+                start = self.buffer.find(b"\xff\xd8")
+                end = self.buffer.find(b"\xff\xd9", start + 2 if start != -1 else 0)
+
+                if start != -1 and end != -1:
+                    jpeg = bytes(self.buffer[start:end + 2])
+                    del self.buffer[:end + 2]
+                    frame = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                    if frame is not None:
+                        return frame
+
+                if len(self.buffer) > 2_000_000:
+                    self.buffer.clear()
+                    break
+
+            return None
+        except requests.RequestException:
+            self.close()
+            return None
+        except Exception:
+            self.close()
+            return None
+
+    def close(self) -> None:
+        if self.response is not None:
+            try:
+                self.response.close()
+            except Exception:
+                pass
+        self.response = None
+        self.byte_iter = None
+        self.buffer.clear()
 
 
 def build_landmarker() -> vision.PoseLandmarker:
@@ -161,17 +343,21 @@ def choose_forward_priority_command(error: float, pose_tick: int) -> tuple[str, 
 def main() -> None:
     landmarker = build_landmarker()
     bot = BotController()
+    relay_server = start_relay_server()
+    mjpeg_reader = MjpegStreamReader(STREAM_URL)
 
-    cap = open_stream()
-    consecutive_stream_failures = 0
     last_frame_ts = time.time()
     fps = 0.0
     pose_tick = 0
     smoothed_nose_x = None
+    last_no_frame_log_at = 0.0
 
     print("Tracking gestartet. Forward-priority Tracking aktiv.")
+    print(f"Video mode: {VIDEO_SOURCE_MODE}")
     print(f"Primärer Stream: {STREAM_URL}")
-    print(f"Fallback Snapshot: {SNAPSHOT_URL}")
+    print(f"Relay: http://127.0.0.1:{RELAY_PORT}{RELAY_PATH}")
+    print(f"Relay MJPEG: http://127.0.0.1:{RELAY_PORT}{RELAY_MJPEG_PATH}")
+    print(f"Relay Status: http://127.0.0.1:{RELAY_PORT}{RELAY_STATUS_PATH}")
 
     try:
         while True:
@@ -182,28 +368,20 @@ def main() -> None:
                 fps = (0.9 * fps) + (0.1 * instant_fps) if fps > 0 else instant_fps
             last_frame_ts = now
 
-            if not cap.isOpened():
-                cap.release()
-                cap = open_stream()
-                time.sleep(0.15)
+            frame = mjpeg_reader.read_frame()
+            if frame is None:
+                update_relay_status(
+                    pose=False,
+                    fps=fps,
+                    state="no_frame_reconnect",
+                    cmd="MS",
+                )
+                if (now - last_no_frame_log_at) >= NO_FRAME_LOG_INTERVAL_S:
+                    print("[tracking] Kein Frame von /stream -> reconnect")
+                    last_no_frame_log_at = now
+                mjpeg_reader.close()
+                time.sleep(0.12)
                 continue
-
-            success, frame = cap.read()
-            if not success or frame is None:
-                consecutive_stream_failures += 1
-
-                fallback_frame = fetch_snapshot_frame()
-                if fallback_frame is not None:
-                    frame = fallback_frame
-                else:
-                    if consecutive_stream_failures >= 3:
-                        cap.release()
-                        cap = open_stream()
-                        consecutive_stream_failures = 0
-                    time.sleep(0.06)
-                    continue
-            else:
-                consecutive_stream_failures = 0
 
             frame = cv2.rotate(frame, cv2.ROTATE_180)
 
@@ -212,7 +390,6 @@ def main() -> None:
             result = landmarker.detect(mp_image)
 
             cmd = "MS"
-            state = "keine pose"
 
             if result.pose_landmarks:
                 landmarks = result.pose_landmarks[0]
@@ -221,21 +398,22 @@ def main() -> None:
                 error = smoothed_nose_x - CENTER_TARGET_X
                 pose_tick += 1
 
-                cmd, state = choose_forward_priority_command(error, pose_tick)
-                status = f"POSE | nose_x={smoothed_nose_x:.2f} | err={error:+.2f}"
+                cmd, state_text = choose_forward_priority_command(error, pose_tick)
 
                 draw_pose(frame, landmarks)
             else:
                 cmd = "MS"
-                state = "keine pose -> stop"
-                status = "Keine Pose erkannt"
+                state_text = "keine pose -> stop"
 
             bot.send(cmd)
+            update_relay_status(
+                pose=bool(result.pose_landmarks),
+                fps=fps,
+                state=state_text,
+                cmd=cmd,
+            )
 
-            cv2.putText(frame, status, (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(frame, f"FPS: {fps:.1f}", (10, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 220, 0), 2)
-            cv2.putText(frame, f"STATE: {state}", (10, 101), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (120, 255, 255), 2)
-            cv2.putText(frame, f"CMD: {cmd}", (10, 132), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (120, 255, 255), 2)
+            update_relay_frame(frame)
 
             cv2.imshow("AlphaBot AI Vision", frame)
 
@@ -243,8 +421,10 @@ def main() -> None:
                 break
 
     finally:
+        mjpeg_reader.close()
+        relay_server.shutdown()
+        relay_server.server_close()
         bot.send("MS", force=True)
-        cap.release()
         cv2.destroyAllWindows()
         landmarker.close()
 
