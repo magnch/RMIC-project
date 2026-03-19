@@ -11,12 +11,18 @@ from mediapipe.tasks.python import vision
 # --- CONFIG ---
 BOT_IP = "192.168.1.108"
 
-# Follow behavior
-TURN_SPEED = 65
+# Forward-priority follow behavior
 FORWARD_SPEED = 60
-CENTER_DEADZONE = 0.12
-DIST_NEAR = 0.22
-DIST_FAR = 0.12
+TURN_SPEED = 50
+
+# Sensitive center tuning (smaller deadzone = more sensitive)
+CENTER_TARGET_X = 0.5
+STEER_DEADZONE = 0.06
+STEER_HARDZONE = 0.14
+
+# Steering pulse cadence while still prioritizing forward movement
+STEER_PULSE_EVERY_SOFT = 7
+STEER_PULSE_EVERY_HARD = 4
 
 # Smoothing (0..1): higher = reacts faster
 SMOOTH_ALPHA = 0.2
@@ -136,38 +142,20 @@ def smooth_value(current: float | None, new_value: float) -> float:
     return (1.0 - SMOOTH_ALPHA) * current + SMOOTH_ALPHA * new_value
 
 
-def compute_shoulder_width(landmarks) -> float | None:
-    if len(landmarks) <= 12:
-        return None
+def choose_forward_priority_command(error: float, pose_tick: int) -> tuple[str, str]:
+    abs_error = abs(error)
 
-    left = landmarks[11]
-    right = landmarks[12]
-    dx = left.x - right.x
-    dy = left.y - right.y
-    width = (dx * dx + dy * dy) ** 0.5
-    return width
+    if abs_error <= STEER_DEADZONE:
+        return f"MF{FORWARD_SPEED}", "zentriert -> vorwaerts"
 
+    pulse_every = STEER_PULSE_EVERY_HARD if abs_error >= STEER_HARDZONE else STEER_PULSE_EVERY_SOFT
 
-def choose_command(error: float, shoulder_width: float) -> tuple[str, str]:
-    if shoulder_width > DIST_NEAR:
-        if error < -CENTER_DEADZONE:
-            return f"ML{TURN_SPEED}", "zu nah -> links ausrichten"
-        if error > CENTER_DEADZONE:
-            return f"MR{TURN_SPEED}", "zu nah -> rechts ausrichten"
-        return "MS", "zu nah -> stop"
+    if pose_tick % pulse_every == 0:
+        if error < 0:
+            return f"ML{TURN_SPEED}", "korrigiere links (impuls)"
+        return f"MR{TURN_SPEED}", "korrigiere rechts (impuls)"
 
-    if shoulder_width < DIST_FAR:
-        if error < -CENTER_DEADZONE:
-            return f"ML{TURN_SPEED}", "zu weit -> links drehen"
-        if error > CENTER_DEADZONE:
-            return f"MR{TURN_SPEED}", "zu weit -> rechts drehen"
-        return f"MF{FORWARD_SPEED}", "zu weit -> langsam vorwaerts"
-
-    if error < -CENTER_DEADZONE:
-        return f"ML{TURN_SPEED}", "ok dist -> links ausrichten"
-    if error > CENTER_DEADZONE:
-        return f"MR{TURN_SPEED}", "ok dist -> rechts ausrichten"
-    return "MS", "ok dist + zentriert -> stop"
+    return f"MF{FORWARD_SPEED}", "vorwaerts (zwischen impuls)"
 
 
 def main() -> None:
@@ -178,10 +166,10 @@ def main() -> None:
     consecutive_stream_failures = 0
     last_frame_ts = time.time()
     fps = 0.0
+    pose_tick = 0
     smoothed_nose_x = None
-    smoothed_shoulder_w = None
 
-    print("Tracking gestartet. Slow-Follow aktiv.")
+    print("Tracking gestartet. Forward-priority Tracking aktiv.")
     print(f"Primärer Stream: {STREAM_URL}")
     print(f"Fallback Snapshot: {SNAPSHOT_URL}")
 
@@ -229,21 +217,12 @@ def main() -> None:
             if result.pose_landmarks:
                 landmarks = result.pose_landmarks[0]
                 nose_x = landmarks[0].x
-                shoulder_w = compute_shoulder_width(landmarks)
+                smoothed_nose_x = smooth_value(smoothed_nose_x, nose_x)
+                error = smoothed_nose_x - CENTER_TARGET_X
+                pose_tick += 1
 
-                if shoulder_w is not None:
-                    smoothed_nose_x = smooth_value(smoothed_nose_x, nose_x)
-                    smoothed_shoulder_w = smooth_value(smoothed_shoulder_w, shoulder_w)
-                    error = smoothed_nose_x - 0.5
-                    cmd, state = choose_command(error, smoothed_shoulder_w)
-                    status = (
-                        f"POSE | nose_x={smoothed_nose_x:.2f} | err={error:+.2f} "
-                        f"| shoulder={smoothed_shoulder_w:.3f}"
-                    )
-                else:
-                    status = "Pose unvollstaendig (Schulter fehlt)"
-                    state = "ungueltige pose"
-                    cmd = "MS"
+                cmd, state = choose_forward_priority_command(error, pose_tick)
+                status = f"POSE | nose_x={smoothed_nose_x:.2f} | err={error:+.2f}"
 
                 draw_pose(frame, landmarks)
             else:
