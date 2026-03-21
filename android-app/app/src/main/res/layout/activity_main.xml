@@ -134,27 +134,72 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Tracking Status"
+                android:text="Control Mode"
                 android:textColor="#9BB0C6"
                 android:textSize="12sp" />
 
             <TextView
-                android:id="@+id/stateValueTextView"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="waiting for data..."
-                android:textColor="#FFFFFF"
-                android:textSize="15sp" />
-
-            <TextView
-                android:id="@+id/trackingLinkValueTextView"
+                android:id="@+id/controlModeValueTextView"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:text="offline"
-                android:textColor="#9BB0C6"
-                android:textSize="13sp" />
+                android:text="PATROL + FOLLOW"
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <SeekBar
+                android:id="@+id/controlModeSeekBar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:max="3"
+                android:progress="3"
+                android:progressTint="@color/ist_logo_blue"
+                android:thumbTint="@color/ist_logo_blue" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:gravity="start"
+                    android:text="Idle"
+                    android:textColor="#9BB0C6"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="Patrol"
+                    android:textColor="#9BB0C6"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:text="Follow"
+                    android:textColor="#9BB0C6"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:gravity="end"
+                    android:text="Both"
+                    android:textColor="#9BB0C6"
+                    android:textSize="11sp" />
+            </LinearLayout>
         </LinearLayout>
 
         <Button

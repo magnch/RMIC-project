@@ -4,6 +4,7 @@ import android.graphics.Color;
 import android.os.Bundle;
 import android.util.Log;
 import android.widget.Button;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -30,18 +31,26 @@ public class MainActivity extends AppCompatActivity {
     private static final String FIREBASE_DB_URL = "https://iot-alarm-app-b4b9c-default-rtdb.europe-west1.firebasedatabase.app";
     private static final String FIREBASE_LIGHT_PATH = "bots/alphabot/light_on";
     private static final String FIREBASE_DISPLAY_PATH = "bots/alphabot/app_display";
+    private static final String FIREBASE_CONTROL_MODE_PATH = "bots/alphabot/app_control/mode_profile";
+
+    private static final String MODE_IDLE = "IDLE";
+    private static final String MODE_PATROL_ONLY = "PATROL_ONLY";
+    private static final String MODE_FOLLOW_ONLY = "FOLLOW_ONLY";
+    private static final String MODE_PATROL_FOLLOW = "PATROL_FOLLOW";
 
     private TextView modeValueTextView;
     private TextView personValueTextView;
     private TextView distanceValueTextView;
-    private TextView stateValueTextView;
-    private TextView trackingLinkValueTextView;
+    private TextView controlModeValueTextView;
     private WebView frameWebView;
     private Button lightToggleButton;
+    private SeekBar controlModeSeekBar;
 
     private DatabaseReference lightRef;
     private DatabaseReference displayRef;
+    private DatabaseReference controlModeRef;
     private boolean currentLightOn = false;
+    private boolean updatingControlFromFirebase = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -57,10 +66,10 @@ public class MainActivity extends AppCompatActivity {
         modeValueTextView = findViewById(R.id.modeValueTextView);
         personValueTextView = findViewById(R.id.personValueTextView);
         distanceValueTextView = findViewById(R.id.distanceValueTextView);
-        stateValueTextView = findViewById(R.id.stateValueTextView);
-        trackingLinkValueTextView = findViewById(R.id.trackingLinkValueTextView);
+        controlModeValueTextView = findViewById(R.id.controlModeValueTextView);
         frameWebView = findViewById(R.id.directWebView);
         lightToggleButton = findViewById(R.id.lightToggleButton);
+        controlModeSeekBar = findViewById(R.id.controlModeSeekBar);
 
         setupWebView(frameWebView);
         loadMjpegStream(frameWebView, TRACKING_STREAM_URL);
@@ -82,7 +91,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onCancelled(DatabaseError error) {
-                stateValueTextView.setText("light read failed: " + error.getCode());
+                Log.e(TAG, "Light read failed: " + error.getCode());
             }
         });
 
@@ -91,33 +100,15 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onDataChange(DataSnapshot snapshot) {
                 if (!snapshot.exists()) {
-                    stateValueTextView.setText("no app_display data yet");
-                    trackingLinkValueTextView.setText("offline");
+                    modeValueTextView.setText("-");
                     return;
                 }
 
                 String mode = snapshot.child("mode").getValue(String.class);
-                String trackingState = snapshot.child("tracking_state").getValue(String.class);
                 Boolean alarm = snapshot.child("tracking_alarm").getValue(Boolean.class);
-                Boolean trackingOnline = snapshot.child("tracking_online").getValue(Boolean.class);
 
                 Number distanceValue = getNumericValue(snapshot.child("ultrasonic_cm"));
-                Number holdValue = getNumericValue(snapshot.child("hold_timer_s"));
-                String updatedAt = snapshot.child("updated_at").getValue(String.class);
-
-                updateDisplayCards(
-                        mode,
-                        alarm,
-                        distanceValue,
-                        trackingState,
-                        holdValue,
-                        trackingOnline
-                );
-
-                if (updatedAt != null && !updatedAt.isBlank()) {
-                    boolean online = trackingOnline != null && trackingOnline;
-                    trackingLinkValueTextView.setText((online ? "online" : "offline") + " · " + updatedAt);
-                }
+                updateDisplayCards(mode, alarm, distanceValue);
 
                 Log.d(TAG, "Display listener update received");
             }
@@ -125,8 +116,27 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onCancelled(DatabaseError error) {
                 Log.e(TAG, "Display listener cancelled: " + error.getMessage());
-                setDisplayOffline();
-                stateValueTextView.setText("display read failed: " + error.getCode());
+                modeValueTextView.setText("OFFLINE");
+            }
+        });
+
+        controlModeRef = database.getReference(FIREBASE_CONTROL_MODE_PATH);
+        controlModeRef.addValueEventListener(new ValueEventListener() {
+            @Override
+            public void onDataChange(DataSnapshot snapshot) {
+                String modeProfile = normalizeModeProfile(snapshot.getValue(String.class));
+                int progress = modeProfileToProgress(modeProfile);
+
+                updatingControlFromFirebase = true;
+                controlModeSeekBar.setProgress(progress);
+                updatingControlFromFirebase = false;
+
+                controlModeValueTextView.setText(modeProfileToLabel(modeProfile));
+            }
+
+            @Override
+            public void onCancelled(DatabaseError error) {
+                Log.e(TAG, "Control mode read failed: " + error.getMessage());
             }
         });
 
@@ -139,7 +149,86 @@ public class MainActivity extends AppCompatActivity {
                     });
         });
 
+        controlModeSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                String modeProfile = progressToModeProfile(progress);
+                controlModeValueTextView.setText(modeProfileToLabel(modeProfile));
+
+                if (fromUser && !updatingControlFromFirebase && controlModeRef != null) {
+                    controlModeRef.setValue(modeProfile);
+                }
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+            }
+        });
+
         updateLightButtonLabel();
+        controlModeValueTextView.setText(modeProfileToLabel(MODE_PATROL_FOLLOW));
+    }
+
+    private String normalizeModeProfile(String value) {
+        if (value == null || value.isBlank()) {
+            return MODE_PATROL_FOLLOW;
+        }
+        String normalized = value.trim().toUpperCase(Locale.ROOT);
+        switch (normalized) {
+            case MODE_IDLE:
+            case MODE_PATROL_ONLY:
+            case MODE_FOLLOW_ONLY:
+            case MODE_PATROL_FOLLOW:
+                return normalized;
+            default:
+                return MODE_PATROL_FOLLOW;
+        }
+    }
+
+    private int modeProfileToProgress(String modeProfile) {
+        switch (modeProfile) {
+            case MODE_IDLE:
+                return 0;
+            case MODE_PATROL_ONLY:
+                return 1;
+            case MODE_FOLLOW_ONLY:
+                return 2;
+            case MODE_PATROL_FOLLOW:
+            default:
+                return 3;
+        }
+    }
+
+    private String progressToModeProfile(int progress) {
+        switch (progress) {
+            case 0:
+                return MODE_IDLE;
+            case 1:
+                return MODE_PATROL_ONLY;
+            case 2:
+                return MODE_FOLLOW_ONLY;
+            case 3:
+            default:
+                return MODE_PATROL_FOLLOW;
+        }
+    }
+
+    private String modeProfileToLabel(String modeProfile) {
+        switch (modeProfile) {
+            case MODE_IDLE:
+                return "IDLE";
+            case MODE_PATROL_ONLY:
+                return "PATROL ONLY";
+            case MODE_FOLLOW_ONLY:
+                return "FOLLOW ONLY";
+            case MODE_PATROL_FOLLOW:
+            default:
+                return "PATROL + FOLLOW";
+        }
     }
 
     private Number getNumericValue(DataSnapshot snapshot) {
@@ -161,22 +250,12 @@ public class MainActivity extends AppCompatActivity {
         modeValueTextView.setText("-");
         personValueTextView.setText("NO");
         distanceValueTextView.setText("n/a");
-        stateValueTextView.setText("waiting for data...");
-        trackingLinkValueTextView.setText("offline");
-    }
-
-    private void setDisplayOffline() {
-        trackingLinkValueTextView.setText("offline");
-        stateValueTextView.setText("firebase read failed");
     }
 
     private void updateDisplayCards(
             String mode,
             Boolean alarm,
-            Number distanceValue,
-            String trackingState,
-            Number holdValue,
-            Boolean trackingOnline
+            Number distanceValue
     ) {
         String normalizedMode = (mode == null || mode.isBlank()) ? "-" : mode.toUpperCase(Locale.ROOT);
         boolean personDetected = alarm != null && alarm;
@@ -187,18 +266,9 @@ public class MainActivity extends AppCompatActivity {
             distanceText = String.format(Locale.US, "%.1f cm", distanceValue.doubleValue());
         }
 
-        String stateText = (trackingState == null || trackingState.isBlank()) ? "-" : trackingState;
-        if (holdValue != null && holdValue.doubleValue() > 0.0) {
-            stateText = stateText + String.format(Locale.US, " (hold %.1fs)", holdValue.doubleValue());
-        }
-
-        boolean online = trackingOnline != null && trackingOnline;
-
         modeValueTextView.setText(normalizedMode);
         personValueTextView.setText(personText);
         distanceValueTextView.setText(distanceText);
-        stateValueTextView.setText(stateText);
-        trackingLinkValueTextView.setText(online ? "online" : "offline");
     }
 
     private void updateLightButtonLabel() {
