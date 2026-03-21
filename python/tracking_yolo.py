@@ -1,18 +1,14 @@
-import time
 import json
-from pathlib import Path
+import time
 from threading import Lock, Thread
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import cv2
-import mediapipe as mp
 import numpy as np
 import requests
-from mediapipe.tasks.python import BaseOptions
-from mediapipe.tasks.python import vision
+from ultralytics import YOLO
 
 # --- CONFIG ---
-# BOT_IP = "192.168.1.108"
 BOT_IP = "172.20.10.6"
 
 # Forward-priority follow behavior
@@ -24,22 +20,26 @@ CENTER_TARGET_X = 0.5
 STEER_DEADZONE = 0.06
 STEER_HARDZONE = 0.14
 
-# Steering pulse cadence while still prioritizing forward movement
-STEER_PULSE_EVERY_SOFT = 7
-STEER_PULSE_EVERY_HARD = 4
-
 # Smoothing (0..1): higher = reacts faster
-SMOOTH_ALPHA = 0.2
+SMOOTH_ALPHA = 0.35
 
 # Command rate limiting
-CMD_MIN_INTERVAL_S = 0.1
+CMD_MIN_INTERVAL_S = 0.05
 TRACKING_SEND_MOTOR_COMMANDS = False
 
-# Video source mode: stream-only (requested)
+# Video source mode: stream-only
 VIDEO_SOURCE_MODE = "stream"
 NO_FRAME_LOG_INTERVAL_S = 3.0
 STREAM_CONNECT_TIMEOUT_S = 2.0
 STREAM_READ_TIMEOUT_S = 8.0
+
+# YOLO config
+YOLO_MODEL_NAME = "yolov8n.pt"
+YOLO_PERSON_CLASS_ID = 0
+YOLO_CONF_THRESHOLD = 0.35
+YOLO_IMAGE_SIZE = 320
+YOLO_INFER_EVERY_N_FRAMES = 1
+YOLO_MAX_STALE_FRAMES = 1
 
 # Local relay server for Android/web consumers (no Firebase needed)
 RELAY_HOST = "0.0.0.0"
@@ -51,21 +51,6 @@ RELAY_JPEG_QUALITY = 70
 
 STREAM_URL = f"http://{BOT_IP}:81/stream"
 CMD_URL = f"http://{BOT_IP}/cmd"
-MODEL_DIR = Path(__file__).resolve().parent / "models"
-MODEL_PATH = MODEL_DIR / "pose_landmarker_lite.task"
-MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
-
-POSE_CONNECTIONS = [
-    (0, 1), (1, 2), (2, 3), (3, 7),
-    (0, 4), (4, 5), (5, 6), (6, 8),
-    (9, 10),
-    (11, 12),
-    (11, 13), (13, 15), (15, 17), (15, 19), (15, 21),
-    (12, 14), (14, 16), (16, 18), (16, 20), (16, 22),
-    (11, 23), (12, 24), (23, 24),
-    (23, 25), (25, 27), (27, 29), (29, 31),
-    (24, 26), (26, 28), (28, 30), (30, 32),
-]
 
 _LATEST_FRAME_JPEG = None
 _LATEST_FRAME_LOCK = Lock()
@@ -183,23 +168,6 @@ def update_relay_status(*, pose: bool, fps: float, state: str, cmd: str) -> None
         _LATEST_STATUS["cmd"] = cmd
 
 
-def ensure_model() -> Path:
-    if MODEL_PATH.exists():
-        return MODEL_PATH
-
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"Downloading pose model: {MODEL_URL}")
-
-    with requests.get(MODEL_URL, timeout=20, stream=True) as response:
-        response.raise_for_status()
-        with open(MODEL_PATH, "wb") as model_file:
-            for chunk in response.iter_content(chunk_size=1024 * 64):
-                if chunk:
-                    model_file.write(chunk)
-
-    return MODEL_PATH
-
-
 class MjpegStreamReader:
     def __init__(self, url: str):
         self.url = url
@@ -228,8 +196,12 @@ class MjpegStreamReader:
             if not self.connect():
                 return None
 
+        byte_iter = self.byte_iter
+        if byte_iter is None:
+            return None
+
         try:
-            for chunk in self.byte_iter:
+            for chunk in byte_iter:
                 if not chunk:
                     continue
 
@@ -268,17 +240,8 @@ class MjpegStreamReader:
         self.buffer.clear()
 
 
-def build_landmarker() -> vision.PoseLandmarker:
-    model_path = ensure_model()
-    options = vision.PoseLandmarkerOptions(
-        base_options=BaseOptions(model_asset_path=str(model_path)),
-        running_mode=vision.RunningMode.IMAGE,
-        num_poses=1,
-        min_pose_detection_confidence=0.5,
-        min_pose_presence_confidence=0.5,
-        min_tracking_confidence=0.5,
-    )
-    return vision.PoseLandmarker.create_from_options(options)
+def build_detector() -> YOLO:
+    return YOLO(YOLO_MODEL_NAME)
 
 
 class BotController:
@@ -305,62 +268,91 @@ class BotController:
         return False
 
 
-def draw_pose(frame, landmarks) -> None:
-    height, width = frame.shape[:2]
-    points = []
-
-    for landmark in landmarks:
-        x = int(landmark.x * width)
-        y = int(landmark.y * height)
-        points.append((x, y))
-        cv2.circle(frame, (x, y), 3, (0, 255, 0), -1)
-
-    for start, end in POSE_CONNECTIONS:
-        if start < len(points) and end < len(points):
-            cv2.line(frame, points[start], points[end], (255, 180, 0), 2)
-
-
 def smooth_value(current: float | None, new_value: float) -> float:
     if current is None:
         return new_value
     return (1.0 - SMOOTH_ALPHA) * current + SMOOTH_ALPHA * new_value
 
 
-def choose_forward_priority_command(error: float, pose_tick: int) -> tuple[str, str]:
+def choose_forward_priority_command(error: float, last_turn_dir: int) -> tuple[str, str, int]:
     abs_error = abs(error)
 
     if abs_error <= STEER_DEADZONE:
-        return f"MF{FORWARD_SPEED}", "centered -> forward"
+        return f"MF{FORWARD_SPEED}", "zentriert -> vorwaerts", 0
 
-    pulse_every = STEER_PULSE_EVERY_HARD if abs_error >= STEER_HARDZONE else STEER_PULSE_EVERY_SOFT
+    turn_dir = -1 if error < 0 else 1
+    if turn_dir < 0:
+        if turn_dir != last_turn_dir:
+            return f"ML{TURN_SPEED}", "richtungswechsel -> links", turn_dir
+        return f"ML{TURN_SPEED}", "korrigiere links", turn_dir
+    if turn_dir != last_turn_dir:
+        return f"MR{TURN_SPEED}", "richtungswechsel -> rechts", turn_dir
+    return f"MR{TURN_SPEED}", "korrigiere rechts", turn_dir
 
-    if pose_tick % pulse_every == 0:
-        if error < 0:
-            return f"ML{TURN_SPEED}", "correct left (pulse)"
-        return f"MR{TURN_SPEED}", "correct right (pulse)"
 
-    return f"MF{FORWARD_SPEED}", "forward (between pulses)"
+def pick_person_box(result) -> tuple[bool, tuple[int, int, int, int] | None, float]:
+    boxes = result.boxes
+    if boxes is None or len(boxes) == 0:
+        return False, None, 0.0
+
+    confs = boxes.conf.detach().cpu().numpy()
+    classes = boxes.cls.detach().cpu().numpy().astype(int)
+
+    person_indices = np.where(classes == YOLO_PERSON_CLASS_ID)[0]
+    if person_indices.size == 0:
+        return False, None, 0.0
+
+    best_rel_idx = int(np.argmax(confs[person_indices]))
+    best_idx = int(person_indices[best_rel_idx])
+    best_conf = float(confs[best_idx])
+
+    if best_conf < YOLO_CONF_THRESHOLD:
+        return False, None, best_conf
+
+    xyxy = boxes.xyxy[best_idx].detach().cpu().numpy()
+    x1, y1, x2, y2 = [int(v) for v in xyxy]
+    return True, (x1, y1, x2, y2), best_conf
+
+
+def draw_target(frame, box: tuple[int, int, int, int], conf: float) -> None:
+    x1, y1, x2, y2 = box
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    cv2.putText(
+        frame,
+        f"person {conf:.2f}",
+        (x1, max(20, y1 - 8)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (0, 255, 0),
+        2,
+    )
 
 
 def main() -> None:
-    landmarker = build_landmarker()
+    detector = build_detector()
     bot = BotController()
     relay_server = start_relay_server()
     mjpeg_reader = MjpegStreamReader(STREAM_URL)
 
     last_frame_ts = time.time()
     fps = 0.0
-    pose_tick = 0
-    smoothed_nose_x = None
+    smoothed_target_x = None
     last_no_frame_log_at = 0.0
+    frame_count = 0
+    cached_has_person = False
+    cached_box = None
+    cached_conf = 0.0
+    cached_stale_frames = YOLO_MAX_STALE_FRAMES + 1
+    last_turn_dir = 0
 
-    print("Tracking started. Forward-priority tracking active.")
+    print("Tracking gestartet. YOLO Forward-priority Tracking aktiv.")
+    print(f"YOLO-Modell: {YOLO_MODEL_NAME}")
     print(f"Video mode: {VIDEO_SOURCE_MODE}")
-    print(f"Primary stream: {STREAM_URL}")
+    print(f"Primärer Stream: {STREAM_URL}")
     print(f"Relay: http://127.0.0.1:{RELAY_PORT}{RELAY_PATH}")
     print(f"Relay MJPEG: http://127.0.0.1:{RELAY_PORT}{RELAY_MJPEG_PATH}")
     print(f"Relay Status: http://127.0.0.1:{RELAY_PORT}{RELAY_STATUS_PATH}")
-    print(f"Motor control enabled: {TRACKING_SEND_MOTOR_COMMANDS}")
+    print(f"Motorsteuerung aktiv: {TRACKING_SEND_MOTOR_COMMANDS}")
 
     try:
         while True:
@@ -380,39 +372,60 @@ def main() -> None:
                     cmd="MS",
                 )
                 if (now - last_no_frame_log_at) >= NO_FRAME_LOG_INTERVAL_S:
-                    print("[tracking] No frame from /stream -> reconnect")
+                    print("[tracking_yolo] Kein Frame von /stream -> reconnect")
                     last_no_frame_log_at = now
                 mjpeg_reader.close()
                 time.sleep(0.12)
                 continue
 
-            image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
-            result = landmarker.detect(mp_image)
+            frame_count += 1
+            should_infer = (
+                cached_stale_frames > YOLO_MAX_STALE_FRAMES
+                or (frame_count % YOLO_INFER_EVERY_N_FRAMES == 0)
+            )
 
-            pose_detected = bool(result.pose_landmarks)
+            if should_infer:
+                yolo_result = detector(
+                    frame,
+                    verbose=False,
+                    classes=[YOLO_PERSON_CLASS_ID],
+                    conf=YOLO_CONF_THRESHOLD,
+                    imgsz=YOLO_IMAGE_SIZE,
+                )[0]
+                has_person, box, conf = pick_person_box(yolo_result)
+                cached_has_person = has_person
+                cached_box = box
+                cached_conf = conf
+                cached_stale_frames = 0
+            else:
+                cached_stale_frames += 1
 
             cmd = "MS"
+            has_person = cached_has_person and cached_stale_frames <= YOLO_MAX_STALE_FRAMES
+            box = cached_box
+            conf = cached_conf
 
-            if pose_detected:
-                landmarks = result.pose_landmarks[0]
-                nose_x = landmarks[0].x
-                smoothed_nose_x = smooth_value(smoothed_nose_x, nose_x)
-                error = smoothed_nose_x - CENTER_TARGET_X
-                pose_tick += 1
+            if has_person and box is not None:
+                x1, _, x2, _ = box
+                frame_w = frame.shape[1]
+                target_x = ((x1 + x2) * 0.5) / frame_w
 
-                cmd, state_text = choose_forward_priority_command(error, pose_tick)
-
-                draw_pose(frame, landmarks)
+                smoothed_target_x = smooth_value(smoothed_target_x, target_x)
+                error = smoothed_target_x - CENTER_TARGET_X
+                cmd, state_text, last_turn_dir = choose_forward_priority_command(error, last_turn_dir)
+                draw_target(frame, box, conf)
+                if not should_infer:
+                    state_text = f"{state_text} (cached)"
             else:
                 cmd = "MS"
-                state_text = "no pose -> stop"
+                state_text = "keine person -> stop"
+                last_turn_dir = 0
 
             if TRACKING_SEND_MOTOR_COMMANDS:
                 bot.send(cmd)
 
             update_relay_status(
-                pose=pose_detected,
+                pose=has_person,
                 fps=fps,
                 state=state_text,
                 cmd=cmd,
@@ -420,7 +433,7 @@ def main() -> None:
 
             update_relay_frame(frame)
 
-            cv2.imshow("AlphaBot AI Vision", frame)
+            cv2.imshow("AlphaBot AI Vision (YOLO)", frame)
 
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
@@ -432,7 +445,6 @@ def main() -> None:
         if TRACKING_SEND_MOTOR_COMMANDS:
             bot.send("MS", force=True)
         cv2.destroyAllWindows()
-        landmarker.close()
 
 
 if __name__ == "__main__":

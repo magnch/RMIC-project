@@ -1,45 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/main"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="12dp"
     tools:context=".MainActivity">
 
     <TextView
-        android:id="@+id/alarmStatusTextView"
-        android:layout_width="wrap_content"
+        android:id="@+id/trackingStateTextView"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="alarm_status"
-        android:textSize="20sp"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintVertical_bias="0.45" />
+        android:text="Pose: - | State: loading..."
+        android:textSize="16sp"
+        android:textStyle="bold" />
 
-    <TextView
-        android:id="@+id/measurementTextView"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="measurement"
-        android:textSize="20sp"
-        app:layout_constraintBottom_toTopOf="@+id/alarmStatusTextView"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintVertical_bias="0.8" />
+    <WebView
+        android:id="@+id/directWebView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="8dp"
+        android:layout_weight="1" />
 
     <Button
-        android:id="@+id/actionButton"
-        android:layout_width="wrap_content"
+        android:id="@+id/lightToggleButton"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="80dp"
-        android:text="ENABLE_ALERT_SOUND"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintHorizontal_bias="0.498"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/alarmStatusTextView" />
+        android:layout_marginTop="8dp"
+        android:text="Light: OFF" />
 
-</androidx.constraintlayout.widget.ConstraintLayout>
+</LinearLayout>

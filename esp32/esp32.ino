@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include "esp_http_server.h"
+#include <Firebase_ESP_Client.h>
 
 // AI Thinker ESP32-CAM Pinout
 #define PWDN_GPIO_NUM 32
@@ -22,14 +23,36 @@
 #define HREF_GPIO_NUM 23
 #define PCLK_GPIO_NUM 22
 
-const char *ssid = "MEO-49A3E0";
-const char *password = "f18db6e514";
+// const char *ssid = "MEO-49A3E0";
+// const char *password = "f18db6e514";
+
+const char *ssid = "iPhone";
+const char *password = "12345677";
+
+
+
+
+
+// Firebase (direct ESP -> RTDB, no Python bridge needed)
+const char *FIREBASE_API_KEY = "AIzaSyAM5T2Gcq0CIZxUgMjVY08popnff-YvpNE";
+const char *FIREBASE_DB_URL = "https://iot-alarm-app-b4b9c-default-rtdb.europe-west1.firebasedatabase.app";
+const char *FIREBASE_LIGHT_PATH = "bots/alphabot/light_on";
+
 WebServer server(80);
 String lastStatus = "";
 bool cameraReady = false;
 httpd_handle_t streamHttpd = NULL;
 
 const int LIGHT_PIN = 4; // ESP32-CAM flash LED
+
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig firebaseConfig;
+bool firebaseReady = false;
+unsigned long lastFirebasePollAt = 0;
+const unsigned long FIREBASE_POLL_INTERVAL_MS = 250;
+
+bool lightOn = false;
 
 #define PART_BOUNDARY "123456789000000000000987654321"
 static const char* STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" PART_BOUNDARY;
@@ -67,6 +90,50 @@ esp_err_t streamHandler(httpd_req_t *req) {
   }
 
   return res;
+}
+
+void setLight(bool on) {
+  lightOn = on;
+  digitalWrite(LIGHT_PIN, on ? HIGH : LOW);
+}
+
+void initFirebase() {
+  firebaseConfig.api_key = FIREBASE_API_KEY;
+  firebaseConfig.database_url = FIREBASE_DB_URL;
+
+  Firebase.reconnectWiFi(true);
+
+  // Anonymous auth (same pattern as your existing lab1 sketch)
+  if (Firebase.signUp(&firebaseConfig, &auth, "", "")) {
+    Firebase.begin(&firebaseConfig, &auth);
+    firebaseReady = true;
+    Serial.println("Firebase ready (anonymous auth)");
+  } else {
+    firebaseReady = false;
+    Serial.print("Firebase signUp failed: ");
+    Serial.println(firebaseConfig.signer.signupError.message.c_str());
+  }
+}
+
+void pollFirebaseControls() {
+  if (!firebaseReady || !Firebase.ready()) {
+    return;
+  }
+
+  unsigned long now = millis();
+  if (now - lastFirebasePollAt < FIREBASE_POLL_INTERVAL_MS) {
+    return;
+  }
+  lastFirebasePollAt = now;
+
+  bool remoteLight = lightOn;
+  if (Firebase.RTDB.getBool(&fbdo, FIREBASE_LIGHT_PATH)) {
+    remoteLight = fbdo.boolData();
+  }
+
+  if (remoteLight != lightOn) {
+    setLight(remoteLight);
+  }
 }
 
 void startStreamServer() {
@@ -129,11 +196,12 @@ bool initCamera() {
 void setup() {
   Serial.begin(115200);
   pinMode(LIGHT_PIN, OUTPUT);
-  digitalWrite(LIGHT_PIN, LOW);
+  setLight(false);
 
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) delay(500);
   WiFi.setSleep(false);
+  initFirebase();
 
   bool cameraOk = initCamera();
   cameraReady = cameraOk;
@@ -148,9 +216,15 @@ void setup() {
     if(server.hasArg("p")) {
       String p = server.arg("p");
       if (p == "L1") {
-        digitalWrite(LIGHT_PIN, HIGH); // Light on
+        setLight(true);
+        if (firebaseReady && Firebase.ready()) {
+          Firebase.RTDB.setBool(&fbdo, FIREBASE_LIGHT_PATH, true);
+        }
       } else if (p == "L0") {
-        digitalWrite(LIGHT_PIN, LOW);  // Light off
+        setLight(false);
+        if (firebaseReady && Firebase.ready()) {
+          Firebase.RTDB.setBool(&fbdo, FIREBASE_LIGHT_PATH, false);
+        }
       } else {
         Serial.println(p); // Forward all other commands to Arduino (motor/servo)
       }
@@ -159,31 +233,6 @@ void setup() {
   });
 
   server.on("/status", [](){ server.send(200, "text/plain", lastStatus); });
-
-  // Single JPEG frame endpoint (fallback/preview)
-  server.on("/capture", [](){
-    if (!cameraReady) {
-      server.send(503, "text/plain", "Camera not ready");
-      return;
-    }
-
-    camera_fb_t *fb = esp_camera_fb_get();
-    if (!fb) {
-      server.send(503, "text/plain", "Camera capture failed");
-      return;
-    }
-
-    server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-    server.sendHeader("Pragma", "no-cache");
-    server.sendHeader("Access-Control-Allow-Origin", "*");
-    server.setContentLength(fb->len);
-    server.send(200, "image/jpeg", "");
-
-    WiFiClient client = server.client();
-    client.write(fb->buf, fb->len);
-    client.flush();
-    esp_camera_fb_return(fb);
-  });
 
   server.begin();
 
@@ -199,4 +248,5 @@ void loop() {
   if (Serial.available()) {
     lastStatus = Serial.readStringUntil('\n');
   }
+  pollFirebaseControls();
 }
