@@ -3,6 +3,7 @@ import re
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -45,6 +46,9 @@ class PatrolConfig:
 
 
 APP_STATUS_PATH = "/status.json"
+FIREBASE_DB_URL = "https://iot-alarm-app-b4b9c-default-rtdb.europe-west1.firebasedatabase.app"
+FIREBASE_DISPLAY_BASE_PATH = "bots/alphabot/app_display"
+FIREBASE_WRITE_INTERVAL_S = 0.45
 
 _LATEST_STATUS = {
     "mode": "INIT",
@@ -97,6 +101,48 @@ def start_status_server(config: PatrolConfig) -> ThreadingHTTPServer:
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server
+
+
+def make_db_url(path: str) -> str:
+    base = FIREBASE_DB_URL.rstrip("/")
+    cleaned = path.lstrip("/")
+    return f"{base}/{cleaned}.json"
+
+
+def firebase_put(path: str, value) -> None:
+    try:
+        requests.put(make_db_url(path), json=value, timeout=0.35)
+    except requests.RequestException:
+        pass
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def publish_display_to_firebase(
+    *,
+    mode: str,
+    pose: bool,
+    state: str,
+    hold_timer_s: float,
+    distance_cm: float | None,
+    cmd: str,
+    tracking_online: bool,
+) -> None:
+    firebase_put(
+        FIREBASE_DISPLAY_BASE_PATH,
+        {
+            "mode": mode,
+            "tracking_alarm": bool(pose),
+            "tracking_state": state,
+            "tracking_online": bool(tracking_online),
+            "ultrasonic_cm": None if distance_cm is None else round(float(distance_cm), 1),
+            "hold_timer_s": round(max(0.0, hold_timer_s), 1),
+            "cmd": cmd,
+            "updated_at": utc_now_iso(),
+        },
+    )
 
 
 class BotController:
@@ -217,6 +263,7 @@ def main() -> None:
     turn_left_next = True
     last_distance = None
     last_log_at = 0.0
+    last_firebase_write_at = 0.0
 
     print("Patrol Controller gestartet (ohne Kamerazugriff)")
     print(f"Tracking backend: {config.tracking_backend}")
@@ -277,6 +324,18 @@ def main() -> None:
                 cmd=cmd,
                 tracking_online=tracking_online,
             )
+
+            if (now - last_firebase_write_at) >= FIREBASE_WRITE_INTERVAL_S:
+                publish_display_to_firebase(
+                    mode=mode,
+                    pose=pose_detected,
+                    state=state,
+                    hold_timer_s=hold_left if (in_pose_hold and not pose_detected) else 0.0,
+                    distance_cm=last_distance,
+                    cmd=cmd,
+                    tracking_online=tracking_online,
+                )
+                last_firebase_write_at = now
 
             if (now - last_log_at) >= 1.0:
                 print(

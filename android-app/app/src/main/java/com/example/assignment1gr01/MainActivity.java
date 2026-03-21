@@ -1,9 +1,8 @@
 package com.example.assignment1gr01;
 
 import android.graphics.Color;
-import android.os.Handler;
-import android.os.Looper;
 import android.os.Bundle;
+import android.util.Log;
 import android.widget.Button;
 import android.widget.TextView;
 import android.webkit.WebSettings;
@@ -21,37 +20,28 @@ import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
 import com.google.firebase.database.ValueEventListener;
-
-import org.json.JSONObject;
-
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity {
+    private static final String TAG = "MainActivity";
 
     // Android emulator reaches host machine via 10.0.2.2
     private static final String TRACKING_STREAM_URL = "http://10.0.2.2:8090/stream.mjpg";
-    private static final String TRACKING_STATUS_URL = "http://10.0.2.2:8091/status.json";
+    private static final String FIREBASE_DB_URL = "https://iot-alarm-app-b4b9c-default-rtdb.europe-west1.firebasedatabase.app";
     private static final String FIREBASE_LIGHT_PATH = "bots/alphabot/light_on";
-    private static final long STATUS_POLL_MS = 350;
+    private static final String FIREBASE_DISPLAY_PATH = "bots/alphabot/app_display";
 
-    private TextView trackingStateTextView;
+    private TextView modeValueTextView;
+    private TextView personValueTextView;
+    private TextView distanceValueTextView;
+    private TextView stateValueTextView;
+    private TextView trackingLinkValueTextView;
     private WebView frameWebView;
     private Button lightToggleButton;
 
     private DatabaseReference lightRef;
+    private DatabaseReference displayRef;
     private boolean currentLightOn = false;
-    private final Handler statusHandler = new Handler(Looper.getMainLooper());
-    private final Runnable statusPollRunnable = new Runnable() {
-        @Override
-        public void run() {
-            fetchTrackingStatusAsync();
-            statusHandler.postDelayed(this, STATUS_POLL_MS);
-        }
-    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -64,16 +54,22 @@ public class MainActivity extends AppCompatActivity {
             return insets;
         });
 
-        trackingStateTextView = findViewById(R.id.trackingStateTextView);
+        modeValueTextView = findViewById(R.id.modeValueTextView);
+        personValueTextView = findViewById(R.id.personValueTextView);
+        distanceValueTextView = findViewById(R.id.distanceValueTextView);
+        stateValueTextView = findViewById(R.id.stateValueTextView);
+        trackingLinkValueTextView = findViewById(R.id.trackingLinkValueTextView);
         frameWebView = findViewById(R.id.directWebView);
         lightToggleButton = findViewById(R.id.lightToggleButton);
 
         setupWebView(frameWebView);
         loadMjpegStream(frameWebView, TRACKING_STREAM_URL);
-        trackingStateTextView.setText("Pose: - | State: loading...");
-        statusHandler.post(statusPollRunnable);
+        setDisplayFallback();
 
-        lightRef = FirebaseDatabase.getInstance().getReference(FIREBASE_LIGHT_PATH);
+        FirebaseDatabase database = FirebaseDatabase.getInstance(FIREBASE_DB_URL);
+        Log.i(TAG, "Using Firebase DB URL: " + FIREBASE_DB_URL);
+
+        lightRef = database.getReference(FIREBASE_LIGHT_PATH);
         lightRef.addValueEventListener(new ValueEventListener() {
             @Override
             public void onDataChange(DataSnapshot snapshot) {
@@ -86,6 +82,51 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onCancelled(DatabaseError error) {
+                stateValueTextView.setText("light read failed: " + error.getCode());
+            }
+        });
+
+        displayRef = database.getReference(FIREBASE_DISPLAY_PATH);
+        displayRef.addValueEventListener(new ValueEventListener() {
+            @Override
+            public void onDataChange(DataSnapshot snapshot) {
+                if (!snapshot.exists()) {
+                    stateValueTextView.setText("no app_display data yet");
+                    trackingLinkValueTextView.setText("offline");
+                    return;
+                }
+
+                String mode = snapshot.child("mode").getValue(String.class);
+                String trackingState = snapshot.child("tracking_state").getValue(String.class);
+                Boolean alarm = snapshot.child("tracking_alarm").getValue(Boolean.class);
+                Boolean trackingOnline = snapshot.child("tracking_online").getValue(Boolean.class);
+
+                Number distanceValue = getNumericValue(snapshot.child("ultrasonic_cm"));
+                Number holdValue = getNumericValue(snapshot.child("hold_timer_s"));
+                String updatedAt = snapshot.child("updated_at").getValue(String.class);
+
+                updateDisplayCards(
+                        mode,
+                        alarm,
+                        distanceValue,
+                        trackingState,
+                        holdValue,
+                        trackingOnline
+                );
+
+                if (updatedAt != null && !updatedAt.isBlank()) {
+                    boolean online = trackingOnline != null && trackingOnline;
+                    trackingLinkValueTextView.setText((online ? "online" : "offline") + " · " + updatedAt);
+                }
+
+                Log.d(TAG, "Display listener update received");
+            }
+
+            @Override
+            public void onCancelled(DatabaseError error) {
+                Log.e(TAG, "Display listener cancelled: " + error.getMessage());
+                setDisplayOffline();
+                stateValueTextView.setText("display read failed: " + error.getCode());
             }
         });
 
@@ -99,6 +140,65 @@ public class MainActivity extends AppCompatActivity {
         });
 
         updateLightButtonLabel();
+    }
+
+    private Number getNumericValue(DataSnapshot snapshot) {
+        Object value = snapshot.getValue();
+        if (value instanceof Number) {
+            return (Number) value;
+        }
+        if (value instanceof String) {
+            try {
+                return Double.parseDouble((String) value);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private void setDisplayFallback() {
+        modeValueTextView.setText("-");
+        personValueTextView.setText("NO");
+        distanceValueTextView.setText("n/a");
+        stateValueTextView.setText("waiting for data...");
+        trackingLinkValueTextView.setText("offline");
+    }
+
+    private void setDisplayOffline() {
+        trackingLinkValueTextView.setText("offline");
+        stateValueTextView.setText("firebase read failed");
+    }
+
+    private void updateDisplayCards(
+            String mode,
+            Boolean alarm,
+            Number distanceValue,
+            String trackingState,
+            Number holdValue,
+            Boolean trackingOnline
+    ) {
+        String normalizedMode = (mode == null || mode.isBlank()) ? "-" : mode.toUpperCase(Locale.ROOT);
+        boolean personDetected = alarm != null && alarm;
+        String personText = personDetected ? "DETECTED" : "CLEAR";
+
+        String distanceText = "n/a";
+        if (distanceValue != null) {
+            distanceText = String.format(Locale.US, "%.1f cm", distanceValue.doubleValue());
+        }
+
+        String stateText = (trackingState == null || trackingState.isBlank()) ? "-" : trackingState;
+        if (holdValue != null && holdValue.doubleValue() > 0.0) {
+            stateText = stateText + String.format(Locale.US, " (hold %.1fs)", holdValue.doubleValue());
+        }
+
+        boolean online = trackingOnline != null && trackingOnline;
+
+        modeValueTextView.setText(normalizedMode);
+        personValueTextView.setText(personText);
+        distanceValueTextView.setText(distanceText);
+        stateValueTextView.setText(stateText);
+        trackingLinkValueTextView.setText(online ? "online" : "offline");
     }
 
     private void updateLightButtonLabel() {
@@ -130,75 +230,9 @@ public class MainActivity extends AppCompatActivity {
         webView.loadDataWithBaseURL(streamUrl, html, "text/html", "UTF-8", null);
     }
 
-    private void fetchTrackingStatusAsync() {
-        new Thread(() -> {
-            HttpURLConnection connection = null;
-            try {
-                URL url = new URL(TRACKING_STATUS_URL);
-                connection = (HttpURLConnection) url.openConnection();
-                connection.setConnectTimeout(1200);
-                connection.setReadTimeout(1200);
-                connection.setRequestMethod("GET");
-
-                int code = connection.getResponseCode();
-                if (code != HttpURLConnection.HTTP_OK) {
-                    runOnUiThread(() -> trackingStateTextView.setText("Pose: - | State: offline"));
-                    return;
-                }
-
-                BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8)
-                );
-                StringBuilder builder = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    builder.append(line);
-                }
-                reader.close();
-
-                JSONObject json = new JSONObject(builder.toString());
-                String mode = json.optString("mode", "-");
-                boolean pose = json.optBoolean("pose", false);
-                String state = json.optString("state", "-");
-                double holdTimer = json.optDouble("hold_timer_s", 0.0);
-                String normalizedState = normalizeState(state);
-
-                runOnUiThread(() -> {
-                    String timerPart = holdTimer > 0.0
-                            ? String.format(" | Timer: %.1fs", holdTimer)
-                            : "";
-                    trackingStateTextView.setText(
-                            "Mode: " + mode
-                                + " | Pose: " + (pose ? "YES" : "NO")
-                                    + timerPart
-                                    + " | State: " + normalizedState
-                    );
-                });
-            } catch (Exception e) {
-                runOnUiThread(() -> trackingStateTextView.setText("Mode: - | Pose: - | State: offline"));
-            } finally {
-                if (connection != null) {
-                    connection.disconnect();
-                }
-            }
-        }).start();
-    }
-
-    private String normalizeState(String state) {
-        if (state == null || state.isBlank()) {
-            return "-";
-        }
-        String lower = state.toLowerCase();
-        if (lower.contains("no pose") || lower.contains("keine pose")) {
-            return "no pose";
-        }
-        return state;
-    }
-
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        statusHandler.removeCallbacks(statusPollRunnable);
 
         if (frameWebView != null) {
             frameWebView.destroy();
