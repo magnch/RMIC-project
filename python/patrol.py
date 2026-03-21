@@ -1,8 +1,11 @@
 import json
 import re
+import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import Lock, Thread
 
 import requests
@@ -34,6 +37,8 @@ class PatrolConfig:
 
     tracking_status_url: str = "http://127.0.0.1:8090/status.json"
     tracking_status_timeout_s: float = 0.20
+    tracking_backend: str = "yolo"  # "mediapipe" or "yolo"
+    tracking_autostart: bool = True
 
     app_status_host: str = "0.0.0.0"
     app_status_port: int = 8091
@@ -170,6 +175,29 @@ def avoid_obstacle(bot: BotController, config: PatrolConfig, turn_left_next: boo
     return not turn_left_next
 
 
+def get_tracking_script_name(tracking_backend: str) -> str:
+    backend = tracking_backend.strip().lower()
+    if backend == "yolo":
+        return "tracking_yolo.py"
+    return "tracking.py"
+
+
+def start_tracking_process(config: PatrolConfig) -> subprocess.Popen | None:
+    if not config.tracking_autostart:
+        return None
+
+    script_name = get_tracking_script_name(config.tracking_backend)
+    script_path = Path(__file__).resolve().parent / script_name
+
+    if not script_path.exists():
+        print(f"[patrol] tracking script not found: {script_path}")
+        return None
+
+    cmd = [sys.executable, str(script_path)]
+    print(f"[patrol] starting tracking backend '{config.tracking_backend}' via: {' '.join(cmd)}")
+    return subprocess.Popen(cmd)
+
+
 def main() -> None:
     config = PatrolConfig()
 
@@ -177,6 +205,7 @@ def main() -> None:
     bot_status_url = f"http://{config.bot_ip}/status"
 
     status_server = start_status_server(config)
+    tracking_process = start_tracking_process(config)
     bot = BotController(
         cmd_url=cmd_url,
         cmd_timeout_s=config.cmd_timeout_s,
@@ -190,6 +219,8 @@ def main() -> None:
     last_log_at = 0.0
 
     print("Patrol Controller gestartet (ohne Kamerazugriff)")
+    print(f"Tracking backend: {config.tracking_backend}")
+    print(f"Tracking autostart: {config.tracking_autostart}")
     print(f"Tracking status source: {config.tracking_status_url}")
     print(f"App status endpoint: http://127.0.0.1:{config.app_status_port}{APP_STATUS_PATH}")
     print("Modi: PATROL / FOLLOW / POSE_HOLD")
@@ -262,6 +293,12 @@ def main() -> None:
         bot.send("MS", force=True)
         status_server.shutdown()
         status_server.server_close()
+        if tracking_process is not None:
+            tracking_process.terminate()
+            try:
+                tracking_process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                tracking_process.kill()
 
 
 if __name__ == "__main__":
