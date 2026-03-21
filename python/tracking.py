@@ -12,7 +12,8 @@ from mediapipe.tasks.python import BaseOptions
 from mediapipe.tasks.python import vision
 
 # --- CONFIG ---
-BOT_IP = "192.168.1.108"
+# BOT_IP = "192.168.1.108"
+BOT_IP = "172.20.10.6"
 
 # Forward-priority follow behavior
 FORWARD_SPEED = 60
@@ -187,7 +188,7 @@ def ensure_model() -> Path:
         return MODEL_PATH
 
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"Lade Pose-Modell herunter: {MODEL_URL}")
+    print(f"Downloading pose model: {MODEL_URL}")
 
     with requests.get(MODEL_URL, timeout=20, stream=True) as response:
         response.raise_for_status()
@@ -329,16 +330,16 @@ def choose_forward_priority_command(error: float, pose_tick: int) -> tuple[str, 
     abs_error = abs(error)
 
     if abs_error <= STEER_DEADZONE:
-        return f"MF{FORWARD_SPEED}", "zentriert -> vorwaerts"
+        return f"MF{FORWARD_SPEED}", "centered -> forward"
 
     pulse_every = STEER_PULSE_EVERY_HARD if abs_error >= STEER_HARDZONE else STEER_PULSE_EVERY_SOFT
 
     if pose_tick % pulse_every == 0:
         if error < 0:
-            return f"ML{TURN_SPEED}", "korrigiere links (impuls)"
-        return f"MR{TURN_SPEED}", "korrigiere rechts (impuls)"
+            return f"ML{TURN_SPEED}", "correct left (pulse)"
+        return f"MR{TURN_SPEED}", "correct right (pulse)"
 
-    return f"MF{FORWARD_SPEED}", "vorwaerts (zwischen impuls)"
+    return f"MF{FORWARD_SPEED}", "forward (between pulses)"
 
 
 def main() -> None:
@@ -353,13 +354,13 @@ def main() -> None:
     smoothed_nose_x = None
     last_no_frame_log_at = 0.0
 
-    print("Tracking gestartet. Forward-priority Tracking aktiv.")
+    print("Tracking started. Forward-priority tracking active.")
     print(f"Video mode: {VIDEO_SOURCE_MODE}")
-    print(f"Primärer Stream: {STREAM_URL}")
+    print(f"Primary stream: {STREAM_URL}")
     print(f"Relay: http://127.0.0.1:{RELAY_PORT}{RELAY_PATH}")
     print(f"Relay MJPEG: http://127.0.0.1:{RELAY_PORT}{RELAY_MJPEG_PATH}")
     print(f"Relay Status: http://127.0.0.1:{RELAY_PORT}{RELAY_STATUS_PATH}")
-    print(f"Motorsteuerung aktiv: {TRACKING_SEND_MOTOR_COMMANDS}")
+    print(f"Motor control enabled: {TRACKING_SEND_MOTOR_COMMANDS}")
 
     try:
         while True:
@@ -379,21 +380,21 @@ def main() -> None:
                     cmd="MS",
                 )
                 if (now - last_no_frame_log_at) >= NO_FRAME_LOG_INTERVAL_S:
-                    print("[tracking] Kein Frame von /stream -> reconnect")
+                    print("[tracking] No frame from /stream -> reconnect")
                     last_no_frame_log_at = now
                 mjpeg_reader.close()
                 time.sleep(0.12)
                 continue
 
-            frame = cv2.rotate(frame, cv2.ROTATE_180)
-
             image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
             result = landmarker.detect(mp_image)
 
+            pose_detected = bool(result.pose_landmarks)
+
             cmd = "MS"
 
-            if result.pose_landmarks:
+            if pose_detected:
                 landmarks = result.pose_landmarks[0]
                 nose_x = landmarks[0].x
                 smoothed_nose_x = smooth_value(smoothed_nose_x, nose_x)
@@ -405,13 +406,13 @@ def main() -> None:
                 draw_pose(frame, landmarks)
             else:
                 cmd = "MS"
-                state_text = "keine pose -> stop"
+                state_text = "no pose -> stop"
 
             if TRACKING_SEND_MOTOR_COMMANDS:
                 bot.send(cmd)
 
             update_relay_status(
-                pose=bool(result.pose_landmarks),
+                pose=pose_detected,
                 fps=fps,
                 state=state_text,
                 cmd=cmd,

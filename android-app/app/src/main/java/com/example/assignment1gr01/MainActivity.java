@@ -70,7 +70,7 @@ public class MainActivity extends AppCompatActivity {
 
         setupWebView(frameWebView);
         loadMjpegStream(frameWebView, TRACKING_STREAM_URL);
-        trackingStateTextView.setText("Pose: - | State: lade...");
+        trackingStateTextView.setText("Pose: - | State: loading...");
         statusHandler.post(statusPollRunnable);
 
         lightRef = FirebaseDatabase.getInstance().getReference(FIREBASE_LIGHT_PATH);
@@ -105,7 +105,7 @@ public class MainActivity extends AppCompatActivity {
         if (lightToggleButton == null) {
             return;
         }
-        lightToggleButton.setText(currentLightOn ? "Licht: AN" : "Licht: AUS");
+        lightToggleButton.setText(currentLightOn ? "Light: ON" : "Light: OFF");
     }
 
     private void setupWebView(WebView webView) {
@@ -169,7 +169,7 @@ public class MainActivity extends AppCompatActivity {
                             : "";
                     trackingStateTextView.setText(
                             "Mode: " + mode
-                                    + " | Pose: " + (pose ? "JA" : "NEIN")
+                                + " | Pose: " + (pose ? "YES" : "NO")
                                     + timerPart
                                     + " | State: " + normalizedState
                     );
@@ -189,8 +189,8 @@ public class MainActivity extends AppCompatActivity {
             return "-";
         }
         String lower = state.toLowerCase();
-        if (lower.contains("keine pose")) {
-            return "keine pose";
+        if (lower.contains("no pose") || lower.contains("keine pose")) {
+            return "no pose";
         }
         return state;
     }

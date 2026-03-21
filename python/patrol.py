@@ -10,7 +10,9 @@ import requests
 
 @dataclass
 class PatrolConfig:
-    bot_ip: str = "192.168.1.108"
+    # bot_ip: str = "192.168.1.108"
+    bot_ip: str = "172.20.10.6"
+
 
     obstacle_threshold_cm: float = 20.0
     forward_speed: int = 95
@@ -22,7 +24,7 @@ class PatrolConfig:
     stop_after_reverse_s: float = 0.08
     turn_135_time_s: float = 0.95
 
-    pose_hold_seconds: float = 5.0
+    pose_hold_seconds: float = 500.0
     refresh_hold_on_continuous_pose: bool = False
 
     bot_status_timeout_s: float = 0.22

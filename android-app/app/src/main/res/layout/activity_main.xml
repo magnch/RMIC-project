@@ -12,7 +12,7 @@
         android:id="@+id/trackingStateTextView"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Pose: - | State: lade..."
+        android:text="Pose: - | State: loading..."
         android:textSize="16sp"
         android:textStyle="bold" />
 
@@ -28,6 +28,6 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:text="Licht: AUS" />
+        android:text="Light: OFF" />
 
 </LinearLayout>
