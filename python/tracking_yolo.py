@@ -278,16 +278,16 @@ def choose_forward_priority_command(error: float, last_turn_dir: int) -> tuple[s
     abs_error = abs(error)
 
     if abs_error <= STEER_DEADZONE:
-        return f"MF{FORWARD_SPEED}", "zentriert -> vorwaerts", 0
+        return f"MF{FORWARD_SPEED}", "centered -> forward", 0
 
     turn_dir = -1 if error < 0 else 1
     if turn_dir < 0:
         if turn_dir != last_turn_dir:
-            return f"ML{TURN_SPEED}", "richtungswechsel -> links", turn_dir
-        return f"ML{TURN_SPEED}", "korrigiere links", turn_dir
+            return f"ML{TURN_SPEED}", "direction change -> left", turn_dir
+        return f"ML{TURN_SPEED}", "adjust left", turn_dir
     if turn_dir != last_turn_dir:
-        return f"MR{TURN_SPEED}", "richtungswechsel -> rechts", turn_dir
-    return f"MR{TURN_SPEED}", "korrigiere rechts", turn_dir
+        return f"MR{TURN_SPEED}", "direction change -> right", turn_dir
+    return f"MR{TURN_SPEED}", "adjust right", turn_dir
 
 
 def pick_person_box(result) -> tuple[bool, tuple[int, int, int, int] | None, float]:
@@ -345,10 +345,10 @@ def main() -> None:
     cached_stale_frames = YOLO_MAX_STALE_FRAMES + 1
     last_turn_dir = 0
 
-    print("Tracking gestartet. YOLO Forward-priority Tracking aktiv.")
-    print(f"YOLO-Modell: {YOLO_MODEL_NAME}")
+    print("Tracking started. YOLO forward-priority tracking active.")
+    print(f"YOLO model: {YOLO_MODEL_NAME}")
     print(f"Video mode: {VIDEO_SOURCE_MODE}")
-    print(f"Primärer Stream: {STREAM_URL}")
+    print(f"Primary stream: {STREAM_URL}")
     print(f"Relay: http://127.0.0.1:{RELAY_PORT}{RELAY_PATH}")
     print(f"Relay MJPEG: http://127.0.0.1:{RELAY_PORT}{RELAY_MJPEG_PATH}")
     print(f"Relay Status: http://127.0.0.1:{RELAY_PORT}{RELAY_STATUS_PATH}")
@@ -372,7 +372,7 @@ def main() -> None:
                     cmd="MS",
                 )
                 if (now - last_no_frame_log_at) >= NO_FRAME_LOG_INTERVAL_S:
-                    print("[tracking_yolo] Kein Frame von /stream -> reconnect")
+                    print("[tracking_yolo] No frame from /stream -> reconnect")
                     last_no_frame_log_at = now
                 mjpeg_reader.close()
                 time.sleep(0.12)
@@ -418,7 +418,7 @@ def main() -> None:
                     state_text = f"{state_text} (cached)"
             else:
                 cmd = "MS"
-                state_text = "keine person -> stop"
+                state_text = "no person -> stop"
                 last_turn_dir = 0
 
             if TRACKING_SEND_MOTOR_COMMANDS:
