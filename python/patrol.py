@@ -1,8 +1,12 @@
 import json
 import re
+import subprocess
+import sys
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import Lock, Thread
 
 import requests
@@ -24,7 +28,7 @@ class PatrolConfig:
     stop_after_reverse_s: float = 0.08
     turn_135_time_s: float = 0.95
 
-    pose_hold_seconds: float = 500.0
+    pose_hold_seconds: float = 3.0
     refresh_hold_on_continuous_pose: bool = False
 
     bot_status_timeout_s: float = 0.22
@@ -34,12 +38,24 @@ class PatrolConfig:
 
     tracking_status_url: str = "http://127.0.0.1:8090/status.json"
     tracking_status_timeout_s: float = 0.20
+    tracking_backend: str = "yolo"  # "mediapipe" or "yolo"
+    tracking_autostart: bool = True
 
     app_status_host: str = "0.0.0.0"
     app_status_port: int = 8091
 
 
 APP_STATUS_PATH = "/status.json"
+FIREBASE_DB_URL = "https://iot-alarm-app-b4b9c-default-rtdb.europe-west1.firebasedatabase.app"
+FIREBASE_DISPLAY_BASE_PATH = "bots/alphabot/app_display"
+FIREBASE_CONTROL_MODE_PATH = "bots/alphabot/app_control/mode_profile"
+FIREBASE_WRITE_INTERVAL_S = 0.45
+FIREBASE_CONTROL_READ_INTERVAL_S = 0.35
+
+MODE_IDLE = "IDLE"
+MODE_PATROL_ONLY = "PATROL_ONLY"
+MODE_FOLLOW_ONLY = "FOLLOW_ONLY"
+MODE_PATROL_FOLLOW = "PATROL_FOLLOW"
 
 _LATEST_STATUS = {
     "mode": "INIT",
@@ -92,6 +108,67 @@ def start_status_server(config: PatrolConfig) -> ThreadingHTTPServer:
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server
+
+
+def make_db_url(path: str) -> str:
+    base = FIREBASE_DB_URL.rstrip("/")
+    cleaned = path.lstrip("/")
+    return f"{base}/{cleaned}.json"
+
+
+def firebase_put(path: str, value) -> None:
+    try:
+        requests.put(make_db_url(path), json=value, timeout=0.35)
+    except requests.RequestException:
+        pass
+
+
+def firebase_get(path: str):
+    try:
+        response = requests.get(make_db_url(path), timeout=0.35)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException:
+        return None
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def publish_display_to_firebase(
+    *,
+    mode: str,
+    pose: bool,
+    state: str,
+    hold_timer_s: float,
+    distance_cm: float | None,
+    cmd: str,
+    tracking_online: bool,
+) -> None:
+    firebase_put(
+        FIREBASE_DISPLAY_BASE_PATH,
+        {
+            "mode": mode,
+            "tracking_alarm": bool(pose),
+            "tracking_state": state,
+            "tracking_online": bool(tracking_online),
+            "ultrasonic_cm": None if distance_cm is None else round(float(distance_cm), 1),
+            "hold_timer_s": round(max(0.0, hold_timer_s), 1),
+            "cmd": cmd,
+            "updated_at": utc_now_iso(),
+        },
+    )
+
+
+def normalize_mode_profile(value) -> str:
+    if not isinstance(value, str):
+        return MODE_PATROL_FOLLOW
+
+    normalized = value.strip().upper()
+    if normalized in {MODE_IDLE, MODE_PATROL_ONLY, MODE_FOLLOW_ONLY, MODE_PATROL_FOLLOW}:
+        return normalized
+    return MODE_PATROL_FOLLOW
 
 
 class BotController:
@@ -170,6 +247,29 @@ def avoid_obstacle(bot: BotController, config: PatrolConfig, turn_left_next: boo
     return not turn_left_next
 
 
+def get_tracking_script_name(tracking_backend: str) -> str:
+    backend = tracking_backend.strip().lower()
+    if backend == "yolo":
+        return "tracking_yolo.py"
+    return "tracking.py"
+
+
+def start_tracking_process(config: PatrolConfig) -> subprocess.Popen | None:
+    if not config.tracking_autostart:
+        return None
+
+    script_name = get_tracking_script_name(config.tracking_backend)
+    script_path = Path(__file__).resolve().parent / script_name
+
+    if not script_path.exists():
+        print(f"[patrol] tracking script not found: {script_path}")
+        return None
+
+    cmd = [sys.executable, str(script_path)]
+    print(f"[patrol] starting tracking backend '{config.tracking_backend}' via: {' '.join(cmd)}")
+    return subprocess.Popen(cmd)
+
+
 def main() -> None:
     config = PatrolConfig()
 
@@ -177,6 +277,7 @@ def main() -> None:
     bot_status_url = f"http://{config.bot_ip}/status"
 
     status_server = start_status_server(config)
+    tracking_process = start_tracking_process(config)
     bot = BotController(
         cmd_url=cmd_url,
         cmd_timeout_s=config.cmd_timeout_s,
@@ -188,15 +289,25 @@ def main() -> None:
     turn_left_next = True
     last_distance = None
     last_log_at = 0.0
+    last_firebase_write_at = 0.0
+    last_control_read_at = 0.0
+    mode_profile = normalize_mode_profile(firebase_get(FIREBASE_CONTROL_MODE_PATH))
 
-    print("Patrol Controller gestartet (ohne Kamerazugriff)")
+    print("Patrol Controller started (without camera access)")
+    print(f"Tracking backend: {config.tracking_backend}")
+    print(f"Tracking autostart: {config.tracking_autostart}")
     print(f"Tracking status source: {config.tracking_status_url}")
     print(f"App status endpoint: http://127.0.0.1:{config.app_status_port}{APP_STATUS_PATH}")
-    print("Modi: PATROL / FOLLOW / POSE_HOLD")
+    print("Execution modes: IDLE / PATROL_ONLY / FOLLOW_ONLY / PATROL_FOLLOW")
 
     try:
         while True:
             now = time.time()
+
+            if (now - last_control_read_at) >= FIREBASE_CONTROL_READ_INTERVAL_S:
+                remote_profile = normalize_mode_profile(firebase_get(FIREBASE_CONTROL_MODE_PATH))
+                mode_profile = remote_profile
+                last_control_read_at = now
 
             pose_detected, tracking_online, tracking_state, tracking_cmd = read_tracking_pose(
                 config.tracking_status_url,
@@ -210,46 +321,93 @@ def main() -> None:
 
             hold_left = max(0.0, config.pose_hold_seconds - (now - last_pose_seen_at))
             in_pose_hold = hold_left > 0.0
+            active_hold_s = 0.0
 
-            if pose_detected and tracking_online:
-                mode = "FOLLOW"
-                cmd = tracking_cmd if tracking_cmd.startswith("M") else "MS"
-                state = f"tracking:{tracking_state}"
-                bot.send(cmd)
-            elif in_pose_hold:
+            if mode_profile == MODE_IDLE:
+                mode = "IDLE"
                 cmd = "MS"
-                state = "pose verloren -> hold"
-                mode = "POSE_HOLD"
+                state = "remote: idle"
                 bot.send(cmd)
-            else:
+                last_distance = read_distance_cm(bot_status_url, config.bot_status_timeout_s)
+            elif mode_profile == MODE_PATROL_ONLY:
                 mode = "PATROL"
                 last_distance = read_distance_cm(bot_status_url, config.bot_status_timeout_s)
-
                 if last_distance is not None and last_distance < config.obstacle_threshold_cm:
-                    state = f"hindernis {last_distance:.1f}cm -> avoid"
+                    state = f"obstacle {last_distance:.1f}cm -> avoid"
                     turn_left_next = avoid_obstacle(bot, config, turn_left_next)
                     cmd = "MS"
                 else:
                     cmd = f"MF{config.forward_speed}"
                     bot.send(cmd)
                     if last_distance is None:
-                        state = "vorwaerts (distanz n/a)"
+                        state = "forward (distance n/a)"
                     else:
-                        state = f"vorwaerts ({last_distance:.1f}cm)"
+                        state = f"forward ({last_distance:.1f}cm)"
+            elif mode_profile == MODE_FOLLOW_ONLY:
+                if pose_detected and tracking_online:
+                    mode = "FOLLOW"
+                    cmd = tracking_cmd if tracking_cmd.startswith("M") else "MS"
+                    state = f"tracking:{tracking_state}"
+                    bot.send(cmd)
+                else:
+                    mode = "WAIT FOR PERSON"
+                    cmd = "MS"
+                    state = "waiting for person"
+                    bot.send(cmd)
+                last_distance = read_distance_cm(bot_status_url, config.bot_status_timeout_s)
+            else:
+                if pose_detected and tracking_online:
+                    mode = "FOLLOW"
+                    cmd = tracking_cmd if tracking_cmd.startswith("M") else "MS"
+                    state = f"tracking:{tracking_state}"
+                    bot.send(cmd)
+                elif in_pose_hold:
+                    cmd = "MS"
+                    state = "pose lost -> hold"
+                    mode = f"HOLD FOR {hold_left:.1f}S"
+                    bot.send(cmd)
+                    active_hold_s = hold_left
+                else:
+                    mode = "PATROL"
+                    last_distance = read_distance_cm(bot_status_url, config.bot_status_timeout_s)
+
+                    if last_distance is not None and last_distance < config.obstacle_threshold_cm:
+                        state = f"obstacle {last_distance:.1f}cm -> avoid"
+                        turn_left_next = avoid_obstacle(bot, config, turn_left_next)
+                        cmd = "MS"
+                    else:
+                        cmd = f"MF{config.forward_speed}"
+                        bot.send(cmd)
+                        if last_distance is None:
+                            state = "forward (distance n/a)"
+                        else:
+                            state = f"forward ({last_distance:.1f}cm)"
 
             update_status(
                 mode=mode,
                 pose=pose_detected,
                 state=state,
-                hold_timer_s=hold_left if (in_pose_hold and not pose_detected) else 0.0,
+                hold_timer_s=active_hold_s,
                 distance_cm=last_distance,
                 cmd=cmd,
                 tracking_online=tracking_online,
             )
 
+            if (now - last_firebase_write_at) >= FIREBASE_WRITE_INTERVAL_S:
+                publish_display_to_firebase(
+                    mode=mode,
+                    pose=pose_detected,
+                    state=state,
+                    hold_timer_s=active_hold_s,
+                    distance_cm=last_distance,
+                    cmd=cmd,
+                    tracking_online=tracking_online,
+                )
+                last_firebase_write_at = now
+
             if (now - last_log_at) >= 1.0:
                 print(
-                    f"[patrol] mode={mode} pose={pose_detected} hold={hold_left:.1f}s "
+                    f"[patrol] profile={mode_profile} mode={mode} pose={pose_detected} hold={hold_left:.1f}s "
                     f"dist={('-' if last_distance is None else f'{last_distance:.1f}cm')}"
                 )
                 last_log_at = now
@@ -257,11 +415,17 @@ def main() -> None:
             time.sleep(config.loop_sleep_s)
 
     except KeyboardInterrupt:
-        print("\nPatrol Controller beendet")
+        print("\nPatrol Controller stopped")
     finally:
         bot.send("MS", force=True)
         status_server.shutdown()
         status_server.server_close()
+        if tracking_process is not None:
+            tracking_process.terminate()
+            try:
+                tracking_process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                tracking_process.kill()
 
 
 if __name__ == "__main__":

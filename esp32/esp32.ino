@@ -195,11 +195,23 @@ bool initCamera() {
 
 void setup() {
   Serial.begin(115200);
+  delay(300);
+  Serial.println();
+  Serial.println("[boot] ESP32 starting...");
   pinMode(LIGHT_PIN, OUTPUT);
   setLight(false);
 
+  Serial.print("[wifi] Connecting to SSID: ");
+  Serial.println(ssid);
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) delay(500);
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(500);
+  }
+  Serial.println();
+  Serial.print("[wifi] Connected. IP: ");
+  Serial.println(WiFi.localIP());
+
   WiFi.setSleep(false);
   initFirebase();
 
