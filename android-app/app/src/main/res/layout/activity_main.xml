@@ -5,7 +5,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fillViewport="true"
-    android:background="#101215"
+    android:background="@android:color/white"
     tools:context=".MainActivity">
 
     <LinearLayout
@@ -17,8 +17,8 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="AlphaBot Live"
-            android:textColor="#FFFFFF"
+            android:text="Security Bot Live"
+            android:textColor="#111111"
             android:textSize="22sp"
             android:textStyle="bold" />
 
@@ -26,7 +26,7 @@
             android:layout_width="match_parent"
             android:layout_height="230dp"
             android:layout_marginTop="10dp"
-            android:background="@drawable/rounded_surface"
+            android:background="@drawable/rounded_camera_surface"
             android:clipToOutline="true"
             android:elevation="4dp">
 
@@ -162,6 +162,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
+            android:backgroundTint="@color/ist_logo_blue"
+            android:textColor="@android:color/white"
             android:text="Light: OFF" />
 
     </LinearLayout>

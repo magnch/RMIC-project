@@ -214,14 +214,14 @@ public class MainActivity extends AppCompatActivity {
         settings.setDomStorageEnabled(true);
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
-        webView.setBackgroundColor(Color.BLACK);
+        webView.setBackgroundColor(Color.WHITE);
         webView.setWebViewClient(new WebViewClient());
     }
 
     private void loadMjpegStream(WebView webView, String streamUrl) {
         String safeUrl = streamUrl.replace("'", "\\'");
-        String html = "<html><body style='margin:0;background:#000;display:flex;align-items:center;justify-content:center;'>"
-                + "<img id='cam' style='width:100%;height:100%;object-fit:contain;'/>"
+        String html = "<html><body style='margin:0;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;'>"
+            + "<img id='cam' style='width:100%;height:100%;object-fit:cover;'/>"
                 + "<script>"
                 + "const base='" + safeUrl + "';"
                 + "const img=document.getElementById('cam');"
