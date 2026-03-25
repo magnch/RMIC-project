@@ -15,13 +15,12 @@ import requests
 @dataclass
 class PatrolConfig:
     # bot_ip: str = "192.168.1.108"
-    bot_ip: str = "172.20.10.6"
-
+    bot_ip: str = "10.104.31.108"
 
     obstacle_threshold_cm: float = 20.0
-    forward_speed: int = 95
+    forward_speed: int = 150
     turn_speed: int = 120
-    reverse_speed: int = 85
+    reverse_speed: int = 100
 
     reverse_time_s: float = 0.60
     stop_before_turn_s: float = 0.08
@@ -407,7 +406,7 @@ def main() -> None:
 
             if (now - last_log_at) >= 1.0:
                 print(
-                    f"[patrol] profile={mode_profile} mode={mode} pose={pose_detected} hold={hold_left:.1f}s "
+                    f"[patrol] profile={mode_profile} mode={mode} cmd={cmd} pose={pose_detected} hold={hold_left:.1f}s "
                     f"dist={('-' if last_distance is None else f'{last_distance:.1f}cm')}"
                 )
                 last_log_at = now

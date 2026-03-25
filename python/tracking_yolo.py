@@ -9,7 +9,7 @@ import requests
 from ultralytics import YOLO
 
 # --- CONFIG ---
-BOT_IP = "172.20.10.6"
+BOT_IP = "10.104.31.108"
 
 # Forward-priority follow behavior
 FORWARD_SPEED = 60
@@ -17,8 +17,8 @@ TURN_SPEED = 50
 
 # Sensitive center tuning (smaller deadzone = more sensitive)
 CENTER_TARGET_X = 0.5
-STEER_DEADZONE = 0.06
-STEER_HARDZONE = 0.14
+STEER_DEADZONE = 0.12
+STEER_HARDZONE = 0.18
 
 # Smoothing (0..1): higher = reacts faster
 SMOOTH_ALPHA = 0.35
@@ -417,6 +417,7 @@ def main() -> None:
                 if not should_infer:
                     state_text = f"{state_text} (cached)"
             else:
+                smoothed_target_x = None  # Reset tracking smoothing when completely lost
                 cmd = "MS"
                 state_text = "no person -> stop"
                 last_turn_dir = 0

@@ -4,7 +4,7 @@ import requests
 
 # Configuration
 # BOT_IP = "192.168.1.108"  # ESP32-CAM IP
-BOT_IP = "172.20.10.6"
+BOT_IP = "10.104.31.108"
 
 
 app = dash.Dash(__name__)

@@ -13,7 +13,7 @@ from mediapipe.tasks.python import vision
 
 # --- CONFIG ---
 # BOT_IP = "192.168.1.108"
-BOT_IP = "172.20.10.6"
+BOT_IP = "10.104.31.108"
 
 # Forward-priority follow behavior
 FORWARD_SPEED = 60
@@ -21,8 +21,8 @@ TURN_SPEED = 50
 
 # Sensitive center tuning (smaller deadzone = more sensitive)
 CENTER_TARGET_X = 0.5
-STEER_DEADZONE = 0.06
-STEER_HARDZONE = 0.14
+STEER_DEADZONE = 0.12
+STEER_HARDZONE = 0.18
 
 # Steering pulse cadence while still prioritizing forward movement
 STEER_PULSE_EVERY_SOFT = 7
@@ -326,20 +326,15 @@ def smooth_value(current: float | None, new_value: float) -> float:
     return (1.0 - SMOOTH_ALPHA) * current + SMOOTH_ALPHA * new_value
 
 
-def choose_forward_priority_command(error: float, pose_tick: int) -> tuple[str, str]:
+def choose_forward_priority_command(error: float) -> tuple[str, str]:
     abs_error = abs(error)
 
     if abs_error <= STEER_DEADZONE:
         return f"MF{FORWARD_SPEED}", "centered -> forward"
 
-    pulse_every = STEER_PULSE_EVERY_HARD if abs_error >= STEER_HARDZONE else STEER_PULSE_EVERY_SOFT
-
-    if pose_tick % pulse_every == 0:
-        if error < 0:
-            return f"ML{TURN_SPEED}", "correct left (pulse)"
-        return f"MR{TURN_SPEED}", "correct right (pulse)"
-
-    return f"MF{FORWARD_SPEED}", "forward (between pulses)"
+    if error < 0:
+        return f"ML{TURN_SPEED}", "correct left"
+    return f"MR{TURN_SPEED}", "correct right"
 
 
 def main() -> None:
@@ -401,10 +396,11 @@ def main() -> None:
                 error = smoothed_nose_x - CENTER_TARGET_X
                 pose_tick += 1
 
-                cmd, state_text = choose_forward_priority_command(error, pose_tick)
+                cmd, state_text = choose_forward_priority_command(error)
 
                 draw_pose(frame, landmarks)
             else:
+                smoothed_nose_x = None  # Reset tracking smoothing when completely lost
                 cmd = "MS"
                 state_text = "no pose -> stop"
 
