@@ -28,7 +28,7 @@ class PatrolConfig:
     turn_135_time_s: float = 0.95
 
     pose_hold_seconds: float = 3.0
-    refresh_hold_on_continuous_pose: bool = False
+    refresh_hold_on_continuous_pose: bool = True
 
     bot_status_timeout_s: float = 0.22
     cmd_timeout_s: float = 0.20
@@ -348,6 +348,12 @@ def main() -> None:
                     cmd = tracking_cmd if tracking_cmd.startswith("M") else "MS"
                     state = f"tracking:{tracking_state}"
                     bot.send(cmd)
+                elif in_pose_hold and tracking_online:
+                    mode = f"HOLD FOR {hold_left:.1f}S"
+                    cmd = tracking_cmd if tracking_cmd.startswith("M") else "MS"
+                    state = f"seek:{tracking_state}"
+                    bot.send(cmd)
+                    active_hold_s = hold_left
                 else:
                     mode = "WAIT FOR PERSON"
                     cmd = "MS"
@@ -360,10 +366,10 @@ def main() -> None:
                     cmd = tracking_cmd if tracking_cmd.startswith("M") else "MS"
                     state = f"tracking:{tracking_state}"
                     bot.send(cmd)
-                elif in_pose_hold:
-                    cmd = "MS"
-                    state = "pose lost -> hold"
+                elif in_pose_hold and tracking_online:
                     mode = f"HOLD FOR {hold_left:.1f}S"
+                    cmd = tracking_cmd if tracking_cmd.startswith("M") else "MS"
+                    state = f"seek:{tracking_state}"
                     bot.send(cmd)
                     active_hold_s = hold_left
                 else:

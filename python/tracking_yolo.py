@@ -337,6 +337,7 @@ def main() -> None:
     last_frame_ts = time.time()
     fps = 0.0
     smoothed_target_x = None
+    last_error = 0.0
     last_no_frame_log_at = 0.0
     frame_count = 0
     cached_has_person = False
@@ -412,14 +413,19 @@ def main() -> None:
 
                 smoothed_target_x = smooth_value(smoothed_target_x, target_x)
                 error = smoothed_target_x - CENTER_TARGET_X
+                last_error = error
                 cmd, state_text, last_turn_dir = choose_forward_priority_command(error, last_turn_dir)
                 draw_target(frame, box, conf)
                 if not should_infer:
                     state_text = f"{state_text} (cached)"
             else:
                 smoothed_target_x = None  # Reset tracking smoothing when completely lost
-                cmd = "MS"
-                state_text = "no person -> stop"
+                if last_error < 0:
+                    cmd = f"ML{TURN_SPEED}"
+                    state_text = "lost -> seek left"
+                else:
+                    cmd = f"MR{TURN_SPEED}"
+                    state_text = "lost -> seek right"
                 last_turn_dir = 0
 
             if TRACKING_SEND_MOTOR_COMMANDS:

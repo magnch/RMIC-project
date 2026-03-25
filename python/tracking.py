@@ -347,6 +347,7 @@ def main() -> None:
     fps = 0.0
     pose_tick = 0
     smoothed_nose_x = None
+    last_error = 0.0
     last_no_frame_log_at = 0.0
 
     print("Tracking started. Forward-priority tracking active.")
@@ -394,6 +395,7 @@ def main() -> None:
                 nose_x = landmarks[0].x
                 smoothed_nose_x = smooth_value(smoothed_nose_x, nose_x)
                 error = smoothed_nose_x - CENTER_TARGET_X
+                last_error = error
                 pose_tick += 1
 
                 cmd, state_text = choose_forward_priority_command(error)
@@ -401,8 +403,12 @@ def main() -> None:
                 draw_pose(frame, landmarks)
             else:
                 smoothed_nose_x = None  # Reset tracking smoothing when completely lost
-                cmd = "MS"
-                state_text = "no pose -> stop"
+                if last_error < 0:
+                    cmd = f"ML{TURN_SPEED}"
+                    state_text = "lost -> seek left"
+                else:
+                    cmd = f"MR{TURN_SPEED}"
+                    state_text = "lost -> seek right"
 
             if TRACKING_SEND_MOTOR_COMMANDS:
                 bot.send(cmd)
