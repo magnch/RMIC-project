@@ -9,21 +9,31 @@ import requests
 from ultralytics import YOLO
 
 # --- CONFIG ---
-BOT_IP = "10.104.31.108"
+# BOT_IP = "10.104.31.108"
+BOT_IP = "172.20.10.6"
 
 # Forward-priority follow behavior
-FORWARD_SPEED = 50
-TURN_SPEED = 60
+FORWARD_SPEED = 70
+TURN_SPEED = 70
+HARD_TURN_SPEED = 80
 SEEK_TURN_SPEED = 55
 SEEK_MAX_DURATION_S = 10
+ENABLE_SEEK_TURN = False
 
 # Sensitive center tuning (smaller deadzone = more sensitive)
 CENTER_TARGET_X = 0.5
-STEER_DEADZONE = 0.30
-STEER_HARDZONE = 0.45
+STEER_DEADZONE = 0.20
+STEER_HARDZONE = 0.35
 
 # Smoothing (0..1): higher = reacts faster
 SMOOTH_ALPHA = 0.35
+
+
+
+
+
+
+
 
 # Command rate limiting
 CMD_MIN_INTERVAL_S = 0.05
@@ -282,14 +292,16 @@ def choose_forward_priority_command(error: float, last_turn_dir: int) -> tuple[s
     if abs_error <= STEER_DEADZONE:
         return f"MF{FORWARD_SPEED}", "centered -> forward", 0
 
+    turn_speed = HARD_TURN_SPEED if abs_error >= STEER_HARDZONE else TURN_SPEED
+
     turn_dir = -1 if error < 0 else 1
     if turn_dir < 0:
         if turn_dir != last_turn_dir:
-            return f"ML{TURN_SPEED}", "direction change -> left", turn_dir
-        return f"ML{TURN_SPEED}", "adjust left", turn_dir
+            return f"ML{turn_speed}", "direction change -> left", turn_dir
+        return f"ML{turn_speed}", "adjust left", turn_dir
     if turn_dir != last_turn_dir:
-        return f"MR{TURN_SPEED}", "direction change -> right", turn_dir
-    return f"MR{TURN_SPEED}", "adjust right", turn_dir
+        return f"MR{turn_speed}", "direction change -> right", turn_dir
+    return f"MR{turn_speed}", "adjust right", turn_dir
 
 
 def pick_person_box(result) -> tuple[bool, tuple[int, int, int, int] | None, float]:
@@ -426,22 +438,28 @@ def main() -> None:
                     state_text = f"{state_text} (cached)"
             else:
                 smoothed_target_x = None  # Reset tracking smoothing when completely lost
-                if lost_seek_started_at is None:
-                    lost_seek_started_at = now
-                    lost_seek_dir = -1 if last_error < 0 else 1
+                if ENABLE_SEEK_TURN:
+                    if lost_seek_started_at is None:
+                        lost_seek_started_at = now
+                        lost_seek_dir = -1 if last_error < 0 else 1
 
-                seek_elapsed = now - lost_seek_started_at
-                if seek_elapsed <= SEEK_MAX_DURATION_S:
-                    if lost_seek_dir < 0:
-                        cmd = f"ML{SEEK_TURN_SPEED}"
-                        state_text = "lost -> seek left"
+                    seek_elapsed = now - lost_seek_started_at
+                    if seek_elapsed <= SEEK_MAX_DURATION_S:
+                        if lost_seek_dir < 0:
+                            cmd = f"ML{SEEK_TURN_SPEED}"
+                            state_text = "lost -> seek left"
+                        else:
+                            cmd = f"MR{SEEK_TURN_SPEED}"
+                            state_text = "lost -> seek right"
+                        state_text = f"{state_text} ({seek_elapsed:.1f}s/{SEEK_MAX_DURATION_S:.1f}s)"
                     else:
-                        cmd = f"MR{SEEK_TURN_SPEED}"
-                        state_text = "lost -> seek right"
-                    state_text = f"{state_text} ({seek_elapsed:.1f}s/{SEEK_MAX_DURATION_S:.1f}s)"
+                        cmd = "MS"
+                        state_text = "lost -> seek timeout -> stop"
                 else:
                     cmd = "MS"
-                    state_text = "lost -> seek timeout -> stop"
+                    state_text = "lost -> seek disabled -> stop"
+                    lost_seek_started_at = None
+                    lost_seek_dir = 0
                 last_turn_dir = 0
 
             if TRACKING_SEND_MOTOR_COMMANDS:

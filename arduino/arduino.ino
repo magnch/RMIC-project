@@ -30,8 +30,8 @@ const bool ENABLE_AUTO_REKICK = false;
 
 
 
-const int TURN_INNER_PERCENT = 0;   // links 100 rechts 45 
-const int TURN_MIN_INNER_PWM = 55;  //aber mindest immer 55pwm
+const int TURN_INNER_PERCENT = 88;  // 80 * 0.88 ~= 70 (inner wheel during hard turns)
+const int TURN_MIN_INNER_PWM = 60;  // keep low-speed turns stable
 
 const unsigned long COMMAND_WATCHDOG_MS = 10000;
 const bool ENABLE_COMMAND_WATCHDOG = false;

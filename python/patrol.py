@@ -215,7 +215,7 @@ def read_distance_cm(status_url: str, timeout_s: float) -> float | None:
         return None
 
 
-def read_tracking_pose(status_url: str, timeout_s: float) -> tuple[bool, bool, str, str]:
+def read_tracking_pose(status_url: str, timeout_s: float) -> tuple[bool, bool, str, str | None]:
     try:
         response = requests.get(status_url, timeout=timeout_s)
         response.raise_for_status()
@@ -223,10 +223,11 @@ def read_tracking_pose(status_url: str, timeout_s: float) -> tuple[bool, bool, s
 
         pose = bool(payload.get("pose", False))
         tracking_state = str(payload.get("state", "-"))
-        tracking_cmd = str(payload.get("cmd", "MS"))
+        tracking_cmd_raw = payload.get("cmd")
+        tracking_cmd = str(tracking_cmd_raw) if tracking_cmd_raw is not None else None
         return pose, True, tracking_state, tracking_cmd
     except (requests.RequestException, ValueError, TypeError, json.JSONDecodeError):
-        return False, False, "offline", "MS"
+        return False, False, "offline", None
 
 
 def avoid_obstacle(bot: BotController, config: PatrolConfig, turn_left_next: bool) -> bool:
@@ -292,6 +293,7 @@ def main() -> None:
     last_log_at = 0.0
     last_firebase_write_at = 0.0
     last_control_read_at = 0.0
+    last_tracking_cmd = "MS"
     mode_profile = normalize_mode_profile(firebase_get(FIREBASE_CONTROL_MODE_PATH))
 
     print("Patrol Controller started (without camera access)")
@@ -314,6 +316,9 @@ def main() -> None:
                 config.tracking_status_url,
                 config.tracking_status_timeout_s,
             )
+
+            if tracking_cmd is not None and tracking_cmd.startswith("M"):
+                last_tracking_cmd = tracking_cmd
 
             if pose_detected and (not last_pose_flag or config.refresh_hold_on_continuous_pose):
                 last_pose_seen_at = now
@@ -345,16 +350,10 @@ def main() -> None:
                     else:
                         state = f"forward ({last_distance:.1f}cm)"
             elif mode_profile == MODE_FOLLOW_ONLY:
-                if pose_detected and tracking_online:
-                    mode = "FOLLOW"
-                    cmd = tracking_cmd if tracking_cmd.startswith("M") else "MS"
-                    state = f"tracking:{tracking_state}"
-                    bot.send(cmd)
-                else:
-                    mode = "WAIT FOR PERSON"
-                    cmd = "MS"
-                    state = "waiting for person"
-                    bot.send(cmd)
+                mode = "FOLLOW"
+                cmd = last_tracking_cmd
+                state = f"tracking:{tracking_state}"
+                bot.send(cmd)
                 last_distance = read_distance_cm(bot_status_url, config.bot_status_timeout_s)
             else:
                 if pose_detected and tracking_online:
