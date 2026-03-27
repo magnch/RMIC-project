@@ -13,7 +13,10 @@ int aktuellerWinkel = 90;
 const int RAMP_STEP = 3;
 const int RAMP_INTERVAL_MS = 20;
 const int START_KICK_PWM = 130;
-const int START_BOOST_MS = 70;
+const int START_BOOST_MS = 30;
+const int AUTO_REKICK_MAX_CMD_PWM = 60;
+const int AUTO_REKICK_PWM = 80;
+const int AUTO_REKICK_INTERVAL_MS = 800;
 
 char motorDir = 'S';
 int commandedPwm = 0;
@@ -21,6 +24,7 @@ int pwmTarget = 0;
 int pwmCurrent = 0;
 unsigned long boostUntil = 0;
 unsigned long lastRampUpdate = 0;
+unsigned long lastRekickAt = 0;
 
 void applyDirection(char d);
 void applyPwmByDirection(int pwm);
@@ -78,6 +82,7 @@ void executeMotor(char d, int s) {
     pwmCurrent = 0;
     pwmTarget = 0;
     boostUntil = 0;
+    lastRekickAt = 0;
     applyDirection(motorDir);
     applyPwmByDirection(0);
     return;
@@ -93,6 +98,7 @@ void executeMotor(char d, int s) {
     applyPwmByDirection(pwmCurrent);
     pwmTarget = START_KICK_PWM;
     boostUntil = millis() + START_BOOST_MS;
+    lastRekickAt = millis();
   } else if (boostUntil == 0) {
     pwmTarget = commandedPwm;
   }
@@ -139,6 +145,20 @@ void updateMotorRamp() {
   if (boostUntil != 0 && now >= boostUntil) {
     boostUntil = 0;
     pwmTarget = commandedPwm;
+  }
+
+  // Periodic re-kick for low-speed commands to overcome motor stiction.
+  if (
+    boostUntil == 0 &&
+    motorDir != 'S' &&
+    commandedPwm > 0 &&
+    commandedPwm <= AUTO_REKICK_MAX_CMD_PWM &&
+    pwmCurrent <= (commandedPwm + 8) &&
+    (now - lastRekickAt) >= AUTO_REKICK_INTERVAL_MS
+  ) {
+    pwmCurrent = AUTO_REKICK_PWM;
+    applyPwmByDirection(pwmCurrent);
+    lastRekickAt = now;
   }
 
   if (now - lastRampUpdate < RAMP_INTERVAL_MS) {
