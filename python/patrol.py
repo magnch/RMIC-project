@@ -27,7 +27,7 @@ class PatrolConfig:
     stop_after_reverse_s: float = 0.08
     turn_135_time_s: float = 0.95
 
-    pose_hold_seconds: float = 3.0
+    pose_hold_seconds: float = 10.0
     refresh_hold_on_continuous_pose: bool = True
 
     bot_status_timeout_s: float = 0.22
