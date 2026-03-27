@@ -1,5 +1,6 @@
 (function () {
   const HOLD_INTERVAL_MS = 120;
+  const SEND_LOOP_MS = 80;
   const MIN_SEND_GAP_MS = 80;
   const PRECISION_FACTOR = 0.6;
   const KEY_TO_COMMAND = {
@@ -21,6 +22,27 @@
   let lastSentCommand = null;
   let lastSentSpeed = null;
   let lastSentAtMs = 0;
+  let desiredCommand = 'S';
+  let desiredSpeed = 0;
+  let desiredSource = '-';
+  let sendLoopId = null;
+  let sendInFlight = false;
+  let sendImmediate = false;
+
+  function debugEvent(event, data = {}) {
+    const payload = {
+      event,
+      ts: Date.now(),
+      ...data,
+    };
+
+    fetch('/debug/client', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      keepalive: true,
+    }).catch(() => {});
+  }
 
   function getBotIp() {
     const ipNode = document.getElementById('bot-ip');
@@ -42,55 +64,92 @@
   function getEffectiveSpeed() {
     const speed = Number.parseInt(getSpeed(), 10);
     if (Number.isNaN(speed)) return 120;
-    const clamped = Math.max(58, Math.min(255, speed));
+    const clamped = Math.max(0, Math.min(255, speed));
     if (!precisionMode) {
       return clamped;
     }
-    return Math.max(58, Math.round(clamped * PRECISION_FACTOR));
+    return Math.max(0, Math.round(clamped * PRECISION_FACTOR));
   }
 
-  function sendMotorCommand(command, speed, retries = 0) {
+  function ensureSendLoop() {
+    if (sendLoopId !== null) {
+      return;
+    }
+
+    sendLoopId = setInterval(() => {
+      flushDesiredCommand();
+    }, SEND_LOOP_MS);
+  }
+
+  function queueDesiredCommand(command, speed, source = '-', immediate = false) {
+    desiredCommand = command;
+    desiredSpeed = speed;
+    desiredSource = source;
+    if (immediate) {
+      sendImmediate = true;
+    }
+    ensureSendLoop();
+    if (immediate) {
+      flushDesiredCommand();
+    }
+  }
+
+  function flushDesiredCommand() {
     const botIp = getBotIp();
     if (!botIp || botIp === '192.168.x.x') {
       return;
     }
 
+    if (sendInFlight) {
+      return;
+    }
+
+    const command = desiredCommand;
+    const speed = desiredSpeed;
+
     const now = Date.now();
     if (
-      retries === 0 &&
+      !sendImmediate &&
       command === lastSentCommand &&
       speed === lastSentSpeed &&
       now - lastSentAtMs < MIN_SEND_GAP_MS
     ) {
+      debugEvent('send-skip-dedupe', { command, speed, source: desiredSource || '-' });
       return;
     }
+    sendImmediate = false;
 
-    const url = `http://${botIp}/cmd?p=M${command}${speed}`;
-    const trySend = (attempt) => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 120);
+    const url = '/api/motor';
+    sendInFlight = true;
+    lastSentCommand = command;
+    lastSentSpeed = speed;
+    lastSentAtMs = Date.now();
+    debugEvent('send-attempt', { command, speed, source: desiredSource || '-' });
 
-      lastSentCommand = command;
-      lastSentSpeed = speed;
-      lastSentAtMs = Date.now();
-
-      fetch(url, { cache: 'no-store', signal: controller.signal })
-        .catch(() => {
-          if (attempt < retries) {
-            setTimeout(() => trySend(attempt + 1), 70);
-          }
-        })
-        .finally(() => {
-          clearTimeout(timer);
-        });
-    };
-
-    trySend(0);
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+      body: JSON.stringify({ command, speed: Number(speed) || 0 }),
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`status=${response.status}`);
+        }
+        debugEvent('send-ok', { command, speed, source: desiredSource || '-' });
+      })
+      .catch((error) => {
+        debugEvent('send-fail', { command, speed, source: desiredSource || '-', info: String(error) });
+      })
+      .finally(() => {
+        sendInFlight = false;
+      });
   }
 
   function sendStop() {
-    sendMotorCommand('S', '0', 2);
-    setTimeout(() => sendMotorCommand('S', '0', 1), 60);
+    debugEvent('stop-dispatch', { command: 'S', speed: 0, source: activeInputSource || '-' });
+    queueDesiredCommand('S', 0, activeInputSource || '-', true);
+    setTimeout(() => queueDesiredCommand('S', 0, activeInputSource || '-', true), 70);
   }
 
   function clearHoldInterval() {
@@ -112,19 +171,21 @@
 
     activeCommand = command;
     activeInputSource = source;
+    debugEvent('hold-start', { command, speed: getEffectiveSpeed(), source });
     window.__alphabotDriving = true;
-    sendMotorCommand(activeCommand, getEffectiveSpeed());
+    queueDesiredCommand(activeCommand, getEffectiveSpeed(), source, true);
     clearHoldInterval();
 
     holdIntervalId = setInterval(() => {
       if (!activeCommand) {
         return;
       }
-      sendMotorCommand(activeCommand, getEffectiveSpeed());
+      queueDesiredCommand(activeCommand, getEffectiveSpeed(), source);
     }, HOLD_INTERVAL_MS);
   }
 
   function stopHold() {
+    debugEvent('hold-stop', { command: activeCommand || '-', speed: getEffectiveSpeed(), source: activeInputSource || '-' });
     activeCommand = null;
     activeInputSource = null;
     window.__alphabotDriving = false;
@@ -203,14 +264,16 @@
 
       if (key === 'shift') {
         precisionMode = true;
+        debugEvent('key-shift-down', { source: 'keyboard' });
         if (activeCommand) {
-          sendMotorCommand(activeCommand, getEffectiveSpeed());
+          queueDesiredCommand(activeCommand, getEffectiveSpeed(), 'keyboard', true);
         }
         return;
       }
 
       if (key === ' ' || key === 'x') {
         event.preventDefault();
+        debugEvent('key-stop', { source: 'keyboard' });
         pressedMovementKeys = [];
         stopHold();
         return;
@@ -222,6 +285,7 @@
       }
 
       event.preventDefault();
+      debugEvent('key-down', { command, source: 'keyboard', info: key });
       if (!pressedMovementKeys.includes(key)) {
         pressedMovementKeys.push(key);
       }
@@ -233,8 +297,9 @@
 
       if (key === 'shift') {
         precisionMode = false;
+        debugEvent('key-shift-up', { source: 'keyboard' });
         if (activeCommand) {
-          sendMotorCommand(activeCommand, getEffectiveSpeed());
+          queueDesiredCommand(activeCommand, getEffectiveSpeed(), 'keyboard', true);
         }
         return;
       }
@@ -253,10 +318,13 @@
         pressedMovementKeys.splice(keyIndex, 1);
       }
 
+      debugEvent('key-up', { command, source: 'keyboard', info: key });
+
       updateKeyboardDrive();
     });
 
     window.addEventListener('blur', () => {
+      debugEvent('window-blur', { source: 'keyboard' });
       precisionMode = false;
       pressedMovementKeys = [];
       if (activeInputSource === 'keyboard') {
@@ -275,7 +343,7 @@
 
     const onSpeedChange = () => {
       if (activeCommand) {
-        sendMotorCommand(activeCommand, getEffectiveSpeed());
+        queueDesiredCommand(activeCommand, getEffectiveSpeed(), activeInputSource || '-', true);
       }
     };
 

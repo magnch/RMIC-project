@@ -1,6 +1,7 @@
 import dash
 from dash import dcc, html, Input, Output, State
 import requests
+from flask import request
 
 # Configuration
 # BOT_IP = "192.168.1.108"  # Niclas Meo
@@ -10,6 +11,48 @@ BOT_IP = "172.20.10.6"  # Niclas hotspot
 
 
 app = dash.Dash(__name__)
+
+
+@app.server.route('/debug/client', methods=['POST'])
+def debug_client_event():
+    payload = request.get_json(silent=True) or {}
+    event = str(payload.get('event', 'unknown'))
+    command = str(payload.get('command', '-'))
+    speed = str(payload.get('speed', '-'))
+    source = str(payload.get('source', '-'))
+    info = str(payload.get('info', '-'))
+    ts = str(payload.get('ts', '-'))
+    print(f"[web-debug] ts={ts} event={event} cmd={command} speed={speed} source={source} info={info}")
+    return ('', 204)
+
+
+@app.server.route('/api/motor', methods=['POST'])
+def motor_proxy():
+    payload = request.get_json(silent=True) or {}
+    command = str(payload.get('command', '')).upper()[:1]
+    speed_raw = payload.get('speed', 0)
+
+    try:
+        speed = int(speed_raw)
+    except (TypeError, ValueError):
+        speed = 0
+
+    speed = max(0, min(255, speed))
+    if command not in {'F', 'B', 'L', 'R', 'S'}:
+        return ({'ok': False, 'error': 'invalid command'}, 400)
+
+    cmd = f"M{command}{speed}"
+    url = f"http://{BOT_IP}/cmd"
+
+    for attempt in range(3):
+        try:
+            response = requests.get(url, params={'p': cmd}, timeout=0.35)
+            if response.ok:
+                return ({'ok': True, 'cmd': cmd, 'attempt': attempt}, 200)
+        except requests.RequestException:
+            pass
+
+    return ({'ok': False, 'cmd': cmd, 'error': 'bot unreachable'}, 502)
 
 def send_cmd(cmd, timeout=0.25, retries=3):
     for _ in range(retries):
@@ -39,10 +82,8 @@ app.layout = html.Div(style={'backgroundColor': '#121212', 'color': 'white', 'fo
         dcc.Input(
             id='speed-input',
             type='number',
-            min=58,
-            max=255,
             step=1,
-            value=120,
+            value=50,
             debounce=False,
             style={
                 'width': '140px',
@@ -134,7 +175,7 @@ def sync_speed_value(speed):
     except (TypeError, ValueError):
         value = 120
 
-    value = max(58, min(255, value))
+    value = max(0, min(255, value))
     return str(value), f"Current PWM setting: {value}"
 
 # 1. Servo & light updates

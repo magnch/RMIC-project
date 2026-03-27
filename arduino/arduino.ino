@@ -10,16 +10,45 @@ Servo meinServo;
 int aktuellerWinkel = 90;
 
 // Motor ramp control
-const int RAMP_STEP = 3;
-const int RAMP_INTERVAL_MS = 20;
-const int START_KICK_PWM = 130;
-const int START_BOOST_MS = 45;
-const int AUTO_REKICK_MAX_CMD_PWM = 60;
-const int AUTO_REKICK_PWM = 90;
-const int AUTO_REKICK_INTERVAL_MS = 650;
-const int TURN_INNER_PERCENT = 45;   // 40 weniger support 
-const int TURN_MIN_INNER_PWM = 55;
-const unsigned long COMMAND_WATCHDOG_MS = 450;
+const int RAMP_STEP = 3;  //Größer = schneller hoch/runter. Kleiner = weicher, aber träger.
+const int RAMP_INTERVAL_MS = 20; //Kleiner = häufiger Updates = schneller Reaktion.Größer = langsamer.
+const int START_KICK_PWM = 90;
+const int START_BOOST_MS = 20; 
+const bool ENABLE_START_KICK = true;
+
+
+
+
+const int AUTO_REKICK_MAX_CMD_PWM = 50; //threshold
+
+const int AUTO_REKICK_PWM = 90; //pwm
+const int AUTO_REKICK_INTERVAL_MS = 650; //intervalle
+const bool ENABLE_AUTO_REKICK = false;
+
+
+
+
+
+
+const int TURN_INNER_PERCENT = 0;   // links 100 rechts 45 
+const int TURN_MIN_INNER_PWM = 55;  //aber mindest immer 55pwm
+
+const unsigned long COMMAND_WATCHDOG_MS = 10000;
+const bool ENABLE_COMMAND_WATCHDOG = false;
+
+
+
+
+const uint8_t STOP_REASON_NONE = 0;
+const uint8_t STOP_REASON_CMD_ZERO = 1;
+const uint8_t STOP_REASON_CMD_INVALID = 2;
+const uint8_t STOP_REASON_WATCHDOG = 3;
+
+
+
+
+
+
 
 char motorDir = 'S';
 int commandedPwm = 0;
@@ -29,11 +58,18 @@ unsigned long boostUntil = 0;
 unsigned long lastRampUpdate = 0;
 unsigned long lastRekickAt = 0;
 unsigned long lastMotorCommandAt = 0;
+char lastRxDir = 'S';
+int lastRxSpeed = 0;
+unsigned long rxCount = 0;
+uint8_t lastStopReason = STOP_REASON_NONE;
+unsigned long watchdogStopCount = 0;
 
 void applyDirection(char d);
 void applyPwmByDirection(int pwm);
 void updateMotorRamp();
 void stopIfCommandTimedOut();
+void hardStop(uint8_t reason);
+const char* stopReasonToText(uint8_t reason);
 
 void setup() {
   // Initialize motors
@@ -47,6 +83,7 @@ void setup() {
   meinServo.write(aktuellerWinkel);
   
   Serial.begin(115200);
+  Serial.setTimeout(20);
   lastMotorCommandAt = millis();
 }
 
@@ -57,9 +94,13 @@ void loop() {
 
     // Motor: M[Direction][Speed], e.g. MF200
     if (cmd.startsWith("M")) { 
-      char dir = cmd[1];
-      int speed = cmd.substring(2).toInt();
-      executeMotor(dir, speed);
+      if (cmd.length() < 2) {
+        hardStop(STOP_REASON_CMD_INVALID);
+      } else {
+        char dir = cmd[1];
+        int speed = cmd.substring(2).toInt();
+        executeMotor(dir, speed);
+      }
     } 
     // Servo: V[Angle], e.g. V120
     else if (cmd.startsWith("V")) { 
@@ -75,7 +116,14 @@ void loop() {
   static unsigned long timer = 0;
   if (millis() - timer > 300) {
     Serial.print("D:"); Serial.print(get_dist());
-    Serial.print("|V:"); Serial.println(aktuellerWinkel);
+    Serial.print("|V:"); Serial.print(aktuellerWinkel);
+    Serial.print("|RX:"); Serial.print(lastRxDir); Serial.print(lastRxSpeed);
+    Serial.print("|CNT:"); Serial.print(rxCount);
+    Serial.print("|MD:"); Serial.print(motorDir); Serial.print(commandedPwm);
+    Serial.print("|PWM:"); Serial.print(pwmCurrent); Serial.print('/'); Serial.print(pwmTarget);
+    Serial.print("|AGE:"); Serial.print(millis() - lastMotorCommandAt);
+    Serial.print("|STOP:"); Serial.print(stopReasonToText(lastStopReason));
+    Serial.print("|WD:"); Serial.println(watchdogStopCount);
     timer = millis();
   }
 }
@@ -83,16 +131,16 @@ void loop() {
 void executeMotor(char d, int s) {
   int speed = constrain(s, 0, 255);
   lastMotorCommandAt = millis();
+  lastRxDir = d;
+  lastRxSpeed = speed;
+  rxCount++;
 
   if ((d != 'F' && d != 'B' && d != 'L' && d != 'R') || speed == 0) {
-    motorDir = 'S';
-    commandedPwm = 0;
-    pwmCurrent = 0;
-    pwmTarget = 0;
-    boostUntil = 0;
-    lastRekickAt = 0;
-    applyDirection(motorDir);
-    applyPwmByDirection(0);
+    if (speed == 0) {
+      hardStop(STOP_REASON_CMD_ZERO);
+    } else {
+      hardStop(STOP_REASON_CMD_INVALID);
+    }
     return;
   }
 
@@ -101,7 +149,7 @@ void executeMotor(char d, int s) {
   applyDirection(motorDir);
 
   // Hard start kick only when starting from standstill
-  if (pwmCurrent == 0 && commandedPwm > 0 && commandedPwm < START_KICK_PWM && boostUntil == 0) {
+  if (ENABLE_START_KICK && pwmCurrent == 0 && commandedPwm > 0 && commandedPwm < START_KICK_PWM && boostUntil == 0) {
     pwmCurrent = START_KICK_PWM;
     applyPwmByDirection(pwmCurrent);
     pwmTarget = START_KICK_PWM;
@@ -112,7 +160,23 @@ void executeMotor(char d, int s) {
   }
 }
 
+void hardStop(uint8_t reason) {
+  motorDir = 'S';
+  commandedPwm = 0;
+  pwmCurrent = 0;
+  pwmTarget = 0;
+  boostUntil = 0;
+  lastRekickAt = 0;
+  lastStopReason = reason;
+  applyDirection(motorDir);
+  applyPwmByDirection(0);
+}
+
 void stopIfCommandTimedOut() {
+  if (!ENABLE_COMMAND_WATCHDOG) {
+    return;
+  }
+
   if (motorDir == 'S') {
     return;
   }
@@ -121,14 +185,15 @@ void stopIfCommandTimedOut() {
     return;
   }
 
-  motorDir = 'S';
-  commandedPwm = 0;
-  pwmCurrent = 0;
-  pwmTarget = 0;
-  boostUntil = 0;
-  lastRekickAt = 0;
-  applyDirection(motorDir);
-  applyPwmByDirection(0);
+  watchdogStopCount++;
+  hardStop(STOP_REASON_WATCHDOG);
+}
+
+const char* stopReasonToText(uint8_t reason) {
+  if (reason == STOP_REASON_CMD_ZERO) return "cmd0";
+  if (reason == STOP_REASON_CMD_INVALID) return "invalid";
+  if (reason == STOP_REASON_WATCHDOG) return "watchdog";
+  return "none";
 }
 
 void applyDirection(char d) {
@@ -182,6 +247,7 @@ void updateMotorRamp() {
 
   // Periodic re-kick for low-speed commands to overcome motor stiction.
   if (
+    ENABLE_AUTO_REKICK &&
     boostUntil == 0 &&
     motorDir != 'S' &&
     commandedPwm > 0 &&
