@@ -16,6 +16,7 @@ import requests
 class PatrolConfig:
     # bot_ip: str = "192.168.1.108"
     bot_ip: str = "172.20.10.6"
+    # bot_ip = "10.104.31.108"
 
 
     obstacle_threshold_cm: float = 20.0

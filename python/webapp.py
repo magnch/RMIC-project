@@ -3,8 +3,10 @@ from dash import dcc, html, Input, Output, State
 import requests
 
 # Configuration
-# BOT_IP = "192.168.1.108"  # ESP32-CAM IP
-BOT_IP = "172.20.10.6"
+# BOT_IP = "192.168.1.108"  # Niclas Meo
+BOT_IP = "172.20.10.6"  # Niclas hotspot
+# BOT_IP = "10.104.31.108" #Magga hotspot
+
 
 
 app = dash.Dash(__name__)
@@ -29,9 +31,36 @@ stop_style = {**button_style, 'backgroundColor': '#ff1744'}
 # --- LAYOUT ---
 app.layout = html.Div(style={'backgroundColor': '#121212', 'color': 'white', 'fontFamily': 'sans-serif', 'textAlign': 'center', 'padding': '20px'}, children=[
     html.Div(BOT_IP, id='bot-ip', style={'display': 'none'}),
-    html.Div('150', id='speed-value', style={'display': 'none'}),
+    html.Div('120', id='speed-value', style={'display': 'none'}),
     dcc.Store(id='telemetry-state', data={'connected': False, 'last_ok': ''}),
     html.H1("ALPHABOT MISSION CONTROL", style={'borderBottom': '2px solid #00e676', 'paddingBottom': '10px'}),
+    html.Div(style={'maxWidth': '420px', 'margin': '14px auto 8px auto'}, children=[
+        html.Label("Drive speed (PWM)", style={'color': '#f5f5f5', 'fontWeight': '600', 'display': 'block', 'marginBottom': '8px'}),
+        dcc.Input(
+            id='speed-input',
+            type='number',
+            min=58,
+            max=255,
+            step=1,
+            value=120,
+            debounce=False,
+            style={
+                'width': '140px',
+                'fontSize': '20px',
+                'textAlign': 'center',
+                'padding': '8px',
+                'borderRadius': '8px',
+                'border': '1px solid #455a64',
+                'backgroundColor': '#1f1f1f',
+                'color': '#f5f5f5'
+            }
+        ),
+        html.Div(
+            id='pwm-display',
+            children='Current PWM setting: 120',
+            style={'marginTop': '8px', 'fontSize': '14px', 'color': '#90caf9', 'fontWeight': '600'}
+        ),
+    ]),
     
     # Live camera stream
     html.Img(id='camera-feed', src=f"http://{BOT_IP}:81/stream", style={'width': '100%', 'maxWidth': '500px', 'borderRadius': '10px', 'border': '2px solid #00e676'}),
@@ -65,24 +94,6 @@ app.layout = html.Div(style={'backgroundColor': '#121212', 'color': 'white', 'fo
 
     # --- SLIDERS & OPTIONS ---
     html.Div(style={'maxWidth': '400px', 'margin': '30px auto'}, children=[
-        html.Label("Motor speed (PWM)", style={'color': '#f5f5f5', 'fontWeight': '600'}),
-        dcc.Slider(
-            58,
-            255,
-            1,
-            value=150,
-            id='speed-slider',
-            marks={
-                58: {'label': '58', 'style': {'color': '#cfd8dc'}},
-                255: {'label': '255', 'style': {'color': '#cfd8dc'}}
-            }
-        ),
-        html.Div(
-            id='pwm-display',
-            children='Current PWM setting: 150',
-            style={'marginTop': '8px', 'fontSize': '14px', 'color': '#90caf9', 'fontWeight': '600'}
-        ),
-        
         html.Br(),
         html.Label("Camera angle (servo)", style={'color': '#f5f5f5', 'fontWeight': '600'}),
         dcc.Slider(
@@ -115,10 +126,16 @@ app.layout = html.Div(style={'backgroundColor': '#121212', 'color': 'white', 'fo
 @app.callback(
     Output('speed-value', 'children'),
     Output('pwm-display', 'children'),
-    Input('speed-slider', 'value')
+    Input('speed-input', 'value')
 )
 def sync_speed_value(speed):
-    return str(speed), f"Current PWM setting: {speed}"
+    try:
+        value = int(speed)
+    except (TypeError, ValueError):
+        value = 120
+
+    value = max(58, min(255, value))
+    return str(value), f"Current PWM setting: {value}"
 
 # 1. Servo & light updates
 @app.callback(

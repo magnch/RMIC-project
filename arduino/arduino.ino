@@ -19,6 +19,7 @@ const int AUTO_REKICK_PWM = 90;
 const int AUTO_REKICK_INTERVAL_MS = 650;
 const int TURN_INNER_PERCENT = 45;   // 40 weniger support 
 const int TURN_MIN_INNER_PWM = 55;
+const unsigned long COMMAND_WATCHDOG_MS = 450;
 
 char motorDir = 'S';
 int commandedPwm = 0;
@@ -27,10 +28,12 @@ int pwmCurrent = 0;
 unsigned long boostUntil = 0;
 unsigned long lastRampUpdate = 0;
 unsigned long lastRekickAt = 0;
+unsigned long lastMotorCommandAt = 0;
 
 void applyDirection(char d);
 void applyPwmByDirection(int pwm);
 void updateMotorRamp();
+void stopIfCommandTimedOut();
 
 void setup() {
   // Initialize motors
@@ -44,6 +47,7 @@ void setup() {
   meinServo.write(aktuellerWinkel);
   
   Serial.begin(115200);
+  lastMotorCommandAt = millis();
 }
 
 void loop() {
@@ -64,6 +68,7 @@ void loop() {
     }
   }
 
+  stopIfCommandTimedOut();
   updateMotorRamp();
 
   // Telemetry (send status back to the Mac every 300 ms)
@@ -77,6 +82,7 @@ void loop() {
 
 void executeMotor(char d, int s) {
   int speed = constrain(s, 0, 255);
+  lastMotorCommandAt = millis();
 
   if ((d != 'F' && d != 'B' && d != 'L' && d != 'R') || speed == 0) {
     motorDir = 'S';
@@ -104,6 +110,25 @@ void executeMotor(char d, int s) {
   } else if (boostUntil == 0) {
     pwmTarget = commandedPwm;
   }
+}
+
+void stopIfCommandTimedOut() {
+  if (motorDir == 'S') {
+    return;
+  }
+
+  if (millis() - lastMotorCommandAt <= COMMAND_WATCHDOG_MS) {
+    return;
+  }
+
+  motorDir = 'S';
+  commandedPwm = 0;
+  pwmCurrent = 0;
+  pwmTarget = 0;
+  boostUntil = 0;
+  lastRekickAt = 0;
+  applyDirection(motorDir);
+  applyPwmByDirection(0);
 }
 
 void applyDirection(char d) {

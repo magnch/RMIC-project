@@ -9,16 +9,18 @@ import requests
 from ultralytics import YOLO
 
 # --- CONFIG ---
-BOT_IP = "172.20.10.6"
+BOT_IP = "10.104.31.108"
 
 # Forward-priority follow behavior
-FORWARD_SPEED = 60
-TURN_SPEED = 50
+FORWARD_SPEED = 50
+TURN_SPEED = 60
+SEEK_TURN_SPEED = 55
+SEEK_MAX_DURATION_S = 10
 
 # Sensitive center tuning (smaller deadzone = more sensitive)
 CENTER_TARGET_X = 0.5
-STEER_DEADZONE = 0.06
-STEER_HARDZONE = 0.14
+STEER_DEADZONE = 0.30
+STEER_HARDZONE = 0.45
 
 # Smoothing (0..1): higher = reacts faster
 SMOOTH_ALPHA = 0.35
@@ -337,6 +339,7 @@ def main() -> None:
     last_frame_ts = time.time()
     fps = 0.0
     smoothed_target_x = None
+    last_error = 0.0
     last_no_frame_log_at = 0.0
     frame_count = 0
     cached_has_person = False
@@ -344,6 +347,8 @@ def main() -> None:
     cached_conf = 0.0
     cached_stale_frames = YOLO_MAX_STALE_FRAMES + 1
     last_turn_dir = 0
+    lost_seek_started_at = None
+    lost_seek_dir = 0
 
     print("Tracking started. YOLO forward-priority tracking active.")
     print(f"YOLO model: {YOLO_MODEL_NAME}")
@@ -412,13 +417,31 @@ def main() -> None:
 
                 smoothed_target_x = smooth_value(smoothed_target_x, target_x)
                 error = smoothed_target_x - CENTER_TARGET_X
+                last_error = error
                 cmd, state_text, last_turn_dir = choose_forward_priority_command(error, last_turn_dir)
                 draw_target(frame, box, conf)
+                lost_seek_started_at = None
+                lost_seek_dir = 0
                 if not should_infer:
                     state_text = f"{state_text} (cached)"
             else:
-                cmd = "MS"
-                state_text = "no person -> stop"
+                smoothed_target_x = None  # Reset tracking smoothing when completely lost
+                if lost_seek_started_at is None:
+                    lost_seek_started_at = now
+                    lost_seek_dir = -1 if last_error < 0 else 1
+
+                seek_elapsed = now - lost_seek_started_at
+                if seek_elapsed <= SEEK_MAX_DURATION_S:
+                    if lost_seek_dir < 0:
+                        cmd = f"ML{SEEK_TURN_SPEED}"
+                        state_text = "lost -> seek left"
+                    else:
+                        cmd = f"MR{SEEK_TURN_SPEED}"
+                        state_text = "lost -> seek right"
+                    state_text = f"{state_text} ({seek_elapsed:.1f}s/{SEEK_MAX_DURATION_S:.1f}s)"
+                else:
+                    cmd = "MS"
+                    state_text = "lost -> seek timeout -> stop"
                 last_turn_dir = 0
 
             if TRACKING_SEND_MOTOR_COMMANDS:

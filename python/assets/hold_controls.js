@@ -34,14 +34,14 @@
       return syncedValue;
     }
 
-    const handle = document.querySelector('#speed-slider .rc-slider-handle');
-    const value = handle ? handle.getAttribute('aria-valuenow') : null;
-    return value || '150';
+    const speedInput = document.getElementById('speed-input');
+    const value = speedInput ? String(speedInput.value || '').trim() : null;
+    return value || '120';
   }
 
   function getEffectiveSpeed() {
     const speed = Number.parseInt(getSpeed(), 10);
-    if (Number.isNaN(speed)) return 150;
+    if (Number.isNaN(speed)) return 120;
     const clamped = Math.max(58, Math.min(255, speed));
     if (!precisionMode) {
       return clamped;
@@ -266,12 +266,12 @@
   }
 
   function bindSpeedLiveUpdate() {
-    const slider = document.getElementById('speed-slider');
-    if (!slider || slider.dataset.speedBound === '1') {
+    const speedInput = document.getElementById('speed-input');
+    if (!speedInput || speedInput.dataset.speedBound === '1') {
       return;
     }
 
-    slider.dataset.speedBound = '1';
+    speedInput.dataset.speedBound = '1';
 
     const onSpeedChange = () => {
       if (activeCommand) {
@@ -279,8 +279,8 @@
       }
     };
 
-    slider.addEventListener('input', onSpeedChange);
-    slider.addEventListener('change', onSpeedChange);
+    speedInput.addEventListener('input', onSpeedChange);
+    speedInput.addEventListener('change', onSpeedChange);
   }
 
   function initBindings() {
