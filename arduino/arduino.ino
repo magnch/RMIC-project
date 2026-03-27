@@ -13,10 +13,12 @@ int aktuellerWinkel = 90;
 const int RAMP_STEP = 3;
 const int RAMP_INTERVAL_MS = 20;
 const int START_KICK_PWM = 130;
-const int START_BOOST_MS = 30;
+const int START_BOOST_MS = 45;
 const int AUTO_REKICK_MAX_CMD_PWM = 60;
-const int AUTO_REKICK_PWM = 80;
-const int AUTO_REKICK_INTERVAL_MS = 800;
+const int AUTO_REKICK_PWM = 90;
+const int AUTO_REKICK_INTERVAL_MS = 650;
+const int TURN_INNER_PERCENT = 45;   // 40 weniger support 
+const int TURN_MIN_INNER_PWM = 55;
 
 char motorDir = 'S';
 int commandedPwm = 0;
@@ -112,11 +114,11 @@ void applyDirection(char d) {
     digitalWrite(IN1, LOW);  digitalWrite(IN2, HIGH);
     digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
   } else if (d == 'L') {
-    digitalWrite(IN1, LOW);  digitalWrite(IN2, LOW);
+    digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
     digitalWrite(IN3, LOW);  digitalWrite(IN4, HIGH);
   } else if (d == 'R') {
     digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
-    digitalWrite(IN3, LOW);  digitalWrite(IN4, LOW);
+    digitalWrite(IN3, LOW);  digitalWrite(IN4, HIGH);
   } else {
     digitalWrite(IN1, LOW);  digitalWrite(IN2, LOW);
     digitalWrite(IN3, LOW);  digitalWrite(IN4, LOW);
@@ -125,11 +127,17 @@ void applyDirection(char d) {
 
 void applyPwmByDirection(int pwm) {
   if (motorDir == 'L') {
-    analogWrite(ENA, 0);
+    int innerPwm = (pwm * TURN_INNER_PERCENT) / 100;
+    if (pwm > 0 && innerPwm < TURN_MIN_INNER_PWM) innerPwm = TURN_MIN_INNER_PWM;
+    if (innerPwm > pwm) innerPwm = pwm;
+    analogWrite(ENA, innerPwm);
     analogWrite(ENB, pwm);
   } else if (motorDir == 'R') {
+    int innerPwm = (pwm * TURN_INNER_PERCENT) / 100;
+    if (pwm > 0 && innerPwm < TURN_MIN_INNER_PWM) innerPwm = TURN_MIN_INNER_PWM;
+    if (innerPwm > pwm) innerPwm = pwm;
     analogWrite(ENA, pwm);
-    analogWrite(ENB, 0);
+    analogWrite(ENB, innerPwm);
   } else if (motorDir == 'S') {
     analogWrite(ENA, 0);
     analogWrite(ENB, 0);
