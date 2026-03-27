@@ -18,9 +18,9 @@ class PatrolConfig:
     bot_ip: str = "10.104.31.108"
 
     obstacle_threshold_cm: float = 20.0
-    forward_speed: int = 150
-    turn_speed: int = 120
-    reverse_speed: int = 100
+    forward_speed: int = 50
+    turn_speed: int = 60
+    reverse_speed: int = 50
 
     reverse_time_s: float = 0.60
     stop_before_turn_s: float = 0.08
@@ -313,6 +313,9 @@ def main() -> None:
                 config.tracking_status_timeout_s,
             )
 
+            time_since_last_seen = now - last_pose_seen_at
+            just_found_after_seeking = pose_detected and (not last_pose_flag) and (time_since_last_seen > 0.3)
+
             if pose_detected and (not last_pose_flag or config.refresh_hold_on_continuous_pose):
                 last_pose_seen_at = now
 
@@ -344,10 +347,17 @@ def main() -> None:
                         state = f"forward ({last_distance:.1f}cm)"
             elif mode_profile == MODE_FOLLOW_ONLY:
                 if pose_detected and tracking_online:
-                    mode = "FOLLOW"
-                    cmd = tracking_cmd if tracking_cmd.startswith("M") else "MS"
-                    state = f"tracking:{tracking_state}"
-                    bot.send(cmd)
+                    if just_found_after_seeking:
+                        mode = "BRAKE"
+                        cmd = "MS"
+                        state = "redetected -> stop"
+                        bot.send("MS", force=True)
+                        time.sleep(0.20)
+                    else:
+                        mode = "FOLLOW"
+                        cmd = tracking_cmd if tracking_cmd.startswith("M") else "MS"
+                        state = f"tracking:{tracking_state}"
+                        bot.send(cmd)
                 elif in_pose_hold and tracking_online:
                     mode = f"HOLD FOR {hold_left:.1f}S"
                     cmd = tracking_cmd if tracking_cmd.startswith("M") else "MS"
@@ -362,10 +372,17 @@ def main() -> None:
                 last_distance = read_distance_cm(bot_status_url, config.bot_status_timeout_s)
             else:
                 if pose_detected and tracking_online:
-                    mode = "FOLLOW"
-                    cmd = tracking_cmd if tracking_cmd.startswith("M") else "MS"
-                    state = f"tracking:{tracking_state}"
-                    bot.send(cmd)
+                    if just_found_after_seeking:
+                        mode = "BRAKE"
+                        cmd = "MS"
+                        state = "redetected -> stop"
+                        bot.send("MS", force=True)
+                        time.sleep(0.20)
+                    else:
+                        mode = "FOLLOW"
+                        cmd = tracking_cmd if tracking_cmd.startswith("M") else "MS"
+                        state = f"tracking:{tracking_state}"
+                        bot.send(cmd)
                 elif in_pose_hold and tracking_online:
                     mode = f"HOLD FOR {hold_left:.1f}S"
                     cmd = tracking_cmd if tracking_cmd.startswith("M") else "MS"

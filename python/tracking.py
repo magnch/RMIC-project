@@ -16,13 +16,13 @@ from mediapipe.tasks.python import vision
 BOT_IP = "10.104.31.108"
 
 # Forward-priority follow behavior
-FORWARD_SPEED = 60
+FORWARD_SPEED = 50
 TURN_SPEED = 50
 
 # Sensitive center tuning (smaller deadzone = more sensitive)
 CENTER_TARGET_X = 0.5
-STEER_DEADZONE = 0.12
-STEER_HARDZONE = 0.18
+STEER_DEADZONE = 0.35
+STEER_HARDZONE = 0.45
 
 # Steering pulse cadence while still prioritizing forward movement
 STEER_PULSE_EVERY_SOFT = 7

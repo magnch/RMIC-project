@@ -12,13 +12,13 @@ from ultralytics import YOLO
 BOT_IP = "10.104.31.108"
 
 # Forward-priority follow behavior
-FORWARD_SPEED = 60
-TURN_SPEED = 50
+FORWARD_SPEED = 50
+TURN_SPEED = 60
 
 # Sensitive center tuning (smaller deadzone = more sensitive)
 CENTER_TARGET_X = 0.5
-STEER_DEADZONE = 0.12
-STEER_HARDZONE = 0.18
+STEER_DEADZONE = 0.30
+STEER_HARDZONE = 0.45
 
 # Smoothing (0..1): higher = reacts faster
 SMOOTH_ALPHA = 0.35
