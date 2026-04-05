@@ -14,7 +14,7 @@ import requests
 
 @dataclass
 class PatrolConfig:
-    bot_ip: str = " "
+    bot_ip: str = "YOUR_BOT_IP"
 
     obstacle_threshold_cm: float = 20.0
     forward_speed: int = 95
@@ -44,7 +44,7 @@ class PatrolConfig:
 
 
 APP_STATUS_PATH = "/status.json"
-FIREBASE_DB_URL = "https://iot-alarm-app-b4b9c-default-rtdb.europe-west1.firebasedatabase.app"
+FIREBASE_DB_URL = "YOUR_FIREBASE_DB_URL"
 FIREBASE_DISPLAY_BASE_PATH = "bots/alphabot/app_display"
 FIREBASE_CONTROL_MODE_PATH = "bots/alphabot/app_control/mode_profile"
 FIREBASE_WRITE_INTERVAL_S = 0.45

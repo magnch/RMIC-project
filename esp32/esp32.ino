@@ -24,12 +24,12 @@
 #define PCLK_GPIO_NUM 22
 
 
-const char *ssid = "iPhone";
-const char *password = "";
+const char *ssid = "YOUR_WIFI_SSID";
+const char *password = "YOUR_WIFI_PASSWORD";
 
 // Firebase (direct ESP -> RTDB, no Python bridge needed)
-const char *FIREBASE_API_KEY = " ";
-const char *FIREBASE_DB_URL = "https://iot-alarm-app-b4b9c-default-rtdb.europe-west1.firebasedatabase.app";
+const char *FIREBASE_API_KEY = "YOUR_FIREBASE_API_KEY";
+const char *FIREBASE_DB_URL = "YOUR_FIREBASE_DB_URL";
 const char *FIREBASE_LIGHT_PATH = "bots/alphabot/light_on";
 
 WebServer server(80);

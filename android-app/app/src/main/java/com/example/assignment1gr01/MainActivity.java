@@ -26,9 +26,9 @@ import java.util.Locale;
 public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MainActivity";
 
-    // Android emulator reaches host machine via 10.0.2.2
-    private static final String TRACKING_STREAM_URL = "http://10.0.2.2:8090/stream.mjpg";
-    private static final String FIREBASE_DB_URL = "https://iot-alarm-app-b4b9c-default-rtdb.europe-west1.firebasedatabase.app";
+    // Configure these values for your local test environment.
+    private static final String TRACKING_STREAM_URL = "http://YOUR_HOST_IP_OR_10_0_2_2:8090/stream.mjpg";
+    private static final String FIREBASE_DB_URL = "YOUR_FIREBASE_DB_URL";
     private static final String FIREBASE_LIGHT_PATH = "bots/alphabot/light_on";
     private static final String FIREBASE_DISPLAY_PATH = "bots/alphabot/app_display";
     private static final String FIREBASE_CONTROL_MODE_PATH = "bots/alphabot/app_control/mode_profile";
