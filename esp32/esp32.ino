@@ -27,9 +27,6 @@
 const char *ssid = "iPhone";
 const char *password = "";
 
-
-
-
 // Firebase (direct ESP -> RTDB, no Python bridge needed)
 const char *FIREBASE_API_KEY = "AIzaSyAM5T2Gcq0CIZxUgMjVY08popnff-YvpNE";
 const char *FIREBASE_DB_URL = "https://iot-alarm-app-b4b9c-default-rtdb.europe-west1.firebasedatabase.app";

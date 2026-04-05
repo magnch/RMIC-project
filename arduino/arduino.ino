@@ -13,11 +13,8 @@ int aktuellerWinkel = 90;
 const int RAMP_STEP = 3;  // Larger = faster ramp-up/down, smaller = smoother but slower response.
 const int RAMP_INTERVAL_MS = 20; // Smaller = more frequent updates and quicker response, larger = slower.
 const int START_KICK_PWM = 90;
-const int START_BOOST_MS = 20; 
+const int START_BOOST_MS = 20;
 const bool ENABLE_START_KICK = true;
-
-
-
 
 const int AUTO_REKICK_MAX_CMD_PWM = 50; // Threshold
 
@@ -25,30 +22,16 @@ const int AUTO_REKICK_PWM = 90; // PWM value
 const int AUTO_REKICK_INTERVAL_MS = 650; // Interval in milliseconds
 const bool ENABLE_AUTO_REKICK = false;
 
-
-
-
-
-
 const int TURN_INNER_PERCENT = 88;  // follow steering: both wheels forward, inner wheel slower
 const int TURN_MIN_INNER_PWM = 60;  // keep inner wheel moving for stable curved follow turns
 
 const unsigned long COMMAND_WATCHDOG_MS = 10000;
 const bool ENABLE_COMMAND_WATCHDOG = false;
 
-
-
-
 const uint8_t STOP_REASON_NONE = 0;
 const uint8_t STOP_REASON_CMD_ZERO = 1;
 const uint8_t STOP_REASON_CMD_INVALID = 2;
 const uint8_t STOP_REASON_WATCHDOG = 3;
-
-
-
-
-
-
 
 char motorDir = 'S';
 int commandedPwm = 0;

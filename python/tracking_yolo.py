@@ -38,13 +38,6 @@ SMOOTH_ALPHA = 0.35
 TRACK_LOST_HOLD_S = 0.35
 CMD_HOLD_MIN_S = 0.12
 
-
-
-
-
-
-
-
 # Command rate limiting
 CMD_MIN_INTERVAL_S = 0.05
 TRACKING_SEND_MOTOR_COMMANDS = False
@@ -387,7 +380,7 @@ def main() -> None:
     print(f"Relay: http://127.0.0.1:{RELAY_PORT}{RELAY_PATH}")
     print(f"Relay MJPEG: http://127.0.0.1:{RELAY_PORT}{RELAY_MJPEG_PATH}")
     print(f"Relay Status: http://127.0.0.1:{RELAY_PORT}{RELAY_STATUS_PATH}")
-    print(f"Motorsteuerung aktiv: {TRACKING_SEND_MOTOR_COMMANDS}")
+    print(f"Motor control enabled: {TRACKING_SEND_MOTOR_COMMANDS}")
 
     try:
         while True:
