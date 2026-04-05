@@ -14,7 +14,7 @@ import requests
 
 @dataclass
 class PatrolConfig:
-    bot_ip: str = "172.20.10.6"
+    bot_ip: str = " "
 
     obstacle_threshold_cm: float = 20.0
     forward_speed: int = 95

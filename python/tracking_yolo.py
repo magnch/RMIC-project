@@ -11,7 +11,7 @@ from ultralytics import YOLO
 
 # --- CONFIG ---
 
-BOT_IP = "172.20.10.6"
+BOT_IP = " "
 
 # Forward-priority follow behavior
 FORWARD_SPEED = 70
