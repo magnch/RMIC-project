@@ -65,12 +65,23 @@ _LATEST_STATUS = {
     "hold_timer_s": 0.0,
     "distance_cm": None,
     "cmd": "MS",
+    "seek_active": False,
     "tracking_online": False,
 }
 _LATEST_STATUS_LOCK = Lock()
 
 
-def update_status(*, mode: str, pose: bool, state: str, hold_timer_s: float, distance_cm: float | None, cmd: str, tracking_online: bool) -> None:
+def update_status(
+    *,
+    mode: str,
+    pose: bool,
+    state: str,
+    hold_timer_s: float,
+    distance_cm: float | None,
+    cmd: str,
+    seek_active: bool,
+    tracking_online: bool,
+) -> None:
     with _LATEST_STATUS_LOCK:
         _LATEST_STATUS["mode"] = mode
         _LATEST_STATUS["pose"] = bool(pose)
@@ -78,6 +89,7 @@ def update_status(*, mode: str, pose: bool, state: str, hold_timer_s: float, dis
         _LATEST_STATUS["hold_timer_s"] = round(max(0.0, hold_timer_s), 1)
         _LATEST_STATUS["distance_cm"] = None if distance_cm is None else round(distance_cm, 1)
         _LATEST_STATUS["cmd"] = cmd
+        _LATEST_STATUS["seek_active"] = bool(seek_active)
         _LATEST_STATUS["tracking_online"] = bool(tracking_online)
 
 
@@ -145,6 +157,7 @@ def publish_display_to_firebase(
     hold_timer_s: float,
     distance_cm: float | None,
     cmd: str,
+    seek_active: bool,
     tracking_online: bool,
 ) -> None:
     firebase_put(
@@ -157,6 +170,7 @@ def publish_display_to_firebase(
             "ultrasonic_cm": None if distance_cm is None else round(float(distance_cm), 1),
             "hold_timer_s": round(max(0.0, hold_timer_s), 1),
             "cmd": cmd,
+            "seek_active": bool(seek_active),
             "updated_at": utc_now_iso(),
         },
     )
@@ -190,6 +204,7 @@ class BotController:
             if response.ok:
                 self.last_cmd = cmd
                 self.last_sent_at = now
+                print(f"[patrol-cmd] {cmd}")
                 return True
         except requests.RequestException:
             return False
@@ -290,10 +305,11 @@ def main() -> None:
     last_pose_flag = False
     turn_left_next = True
     last_distance = None
-    last_log_at = 0.0
     last_firebase_write_at = 0.0
     last_control_read_at = 0.0
     last_tracking_cmd = "MS"
+    last_follow_log_state = ""
+    last_follow_log_cmd = ""
     mode_profile = normalize_mode_profile(firebase_get(FIREBASE_CONTROL_MODE_PATH))
 
     print("Patrol Controller started (without camera access)")
@@ -328,6 +344,7 @@ def main() -> None:
             hold_left = max(0.0, config.pose_hold_seconds - (now - last_pose_seen_at))
             in_pose_hold = hold_left > 0.0
             active_hold_s = 0.0
+            seek_active = False
 
             if mode_profile == MODE_IDLE:
                 mode = "IDLE"
@@ -352,14 +369,17 @@ def main() -> None:
             elif mode_profile == MODE_FOLLOW_ONLY:
                 mode = "FOLLOW"
                 cmd = last_tracking_cmd
-                state = f"tracking:{tracking_state}"
+                seek_active = "seek" in tracking_state.lower()
+                state = f"tracking:{tracking_state} | seek={seek_active} | cmd={cmd}"
                 bot.send(cmd)
-                last_distance = read_distance_cm(bot_status_url, config.bot_status_timeout_s)
+                last_distance = None
             else:
                 if pose_detected and tracking_online:
                     mode = "FOLLOW"
                     cmd = tracking_cmd if tracking_cmd.startswith("M") else "MS"
-                    state = f"tracking:{tracking_state}"
+                    seek_active = "seek" in tracking_state.lower()
+                    state = f"tracking:{tracking_state} | seek={seek_active} | cmd={cmd}"
+                    last_distance = None
                     bot.send(cmd)
                 elif in_pose_hold:
                     cmd = "MS"
@@ -383,34 +403,42 @@ def main() -> None:
                         else:
                             state = f"forward ({last_distance:.1f}cm)"
 
+            status_pose = pose_detected
+            status_hold_s = active_hold_s
+            status_distance_cm = last_distance
+            if mode == "FOLLOW":
+                status_pose = False
+                status_hold_s = 0.0
+                status_distance_cm = None
+
             update_status(
                 mode=mode,
-                pose=pose_detected,
+                pose=status_pose,
                 state=state,
-                hold_timer_s=active_hold_s,
-                distance_cm=last_distance,
+                hold_timer_s=status_hold_s,
+                distance_cm=status_distance_cm,
                 cmd=cmd,
+                seek_active=seek_active,
                 tracking_online=tracking_online,
             )
+
+            if mode == "FOLLOW" and (state != last_follow_log_state or cmd != last_follow_log_cmd):
+                print(f"[patrol-follow] {state}")
+                last_follow_log_state = state
+                last_follow_log_cmd = cmd
 
             if (now - last_firebase_write_at) >= FIREBASE_WRITE_INTERVAL_S:
                 publish_display_to_firebase(
                     mode=mode,
-                    pose=pose_detected,
+                    pose=status_pose,
                     state=state,
-                    hold_timer_s=active_hold_s,
-                    distance_cm=last_distance,
+                    hold_timer_s=status_hold_s,
+                    distance_cm=status_distance_cm,
                     cmd=cmd,
+                    seek_active=seek_active,
                     tracking_online=tracking_online,
                 )
                 last_firebase_write_at = now
-
-            if (now - last_log_at) >= 1.0:
-                print(
-                    f"[patrol] profile={mode_profile} mode={mode} pose={pose_detected} hold={hold_left:.1f}s "
-                    f"dist={('-' if last_distance is None else f'{last_distance:.1f}cm')}"
-                )
-                last_log_at = now
 
             time.sleep(config.loop_sleep_s)
 

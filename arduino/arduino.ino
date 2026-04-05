@@ -30,8 +30,8 @@ const bool ENABLE_AUTO_REKICK = false;
 
 
 
-const int TURN_INNER_PERCENT = 88;  // 80 * 0.88 ~= 70 (inner wheel during hard turns)
-const int TURN_MIN_INNER_PWM = 60;  // keep low-speed turns stable
+const int TURN_INNER_PERCENT = 88;  // follow steering: both wheels forward, inner wheel slower
+const int TURN_MIN_INNER_PWM = 60;  // keep inner wheel moving for stable curved follow turns
 
 const unsigned long COMMAND_WATCHDOG_MS = 10000;
 const bool ENABLE_COMMAND_WATCHDOG = false;
@@ -135,7 +135,7 @@ void executeMotor(char d, int s) {
   lastRxSpeed = speed;
   rxCount++;
 
-  if ((d != 'F' && d != 'B' && d != 'L' && d != 'R') || speed == 0) {
+  if ((d != 'F' && d != 'B' && d != 'L' && d != 'R' && d != 'G' && d != 'H') || speed == 0) {
     if (speed == 0) {
       hardStop(STOP_REASON_CMD_ZERO);
     } else {
@@ -209,6 +209,14 @@ void applyDirection(char d) {
   } else if (d == 'R') {
     digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
     digitalWrite(IN3, LOW);  digitalWrite(IN4, HIGH);
+  } else if (d == 'G') {
+    // Seek left one-wheel steering: both wheels forward, left wheel can be set to 0 PWM.
+    digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
+    digitalWrite(IN3, LOW);  digitalWrite(IN4, HIGH);
+  } else if (d == 'H') {
+    // Seek right one-wheel steering: both wheels forward, right wheel can be set to 0 PWM.
+    digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
+    digitalWrite(IN3, LOW);  digitalWrite(IN4, HIGH);
   } else {
     digitalWrite(IN1, LOW);  digitalWrite(IN2, LOW);
     digitalWrite(IN3, LOW);  digitalWrite(IN4, LOW);
@@ -228,6 +236,12 @@ void applyPwmByDirection(int pwm) {
     if (innerPwm > pwm) innerPwm = pwm;
     analogWrite(ENA, pwm);
     analogWrite(ENB, innerPwm);
+  } else if (motorDir == 'G') {
+    analogWrite(ENA, 0);
+    analogWrite(ENB, pwm);
+  } else if (motorDir == 'H') {
+    analogWrite(ENA, pwm);
+    analogWrite(ENB, 0);
   } else if (motorDir == 'S') {
     analogWrite(ENA, 0);
     analogWrite(ENB, 0);

@@ -1,5 +1,6 @@
 import json
 import time
+from collections import deque
 from threading import Lock, Thread
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -16,9 +17,14 @@ BOT_IP = "172.20.10.6"
 FORWARD_SPEED = 70
 TURN_SPEED = 70
 HARD_TURN_SPEED = 80
-SEEK_TURN_SPEED = 55
-SEEK_MAX_DURATION_S = 10
+SEEK_TURN_SPEED = 70
+SEEK_START_DELAY_S = 1.0
+SEEK_MAX_DURATION_S = 0.2
+SEEK_MIN_ACTIVE_LOOPS = 3
 ENABLE_SEEK_TURN = False
+SEEK_USE_NORMAL_TURN = True
+LOST_DIR_AVG_FRAMES = 5
+LOST_DIR_MIN_OFFSET = 0.02
 
 # Sensitive center tuning (smaller deadzone = more sensitive)
 CENTER_TARGET_X = 0.5
@@ -27,6 +33,10 @@ STEER_HARDZONE = 0.35
 
 # Smoothing (0..1): higher = reacts faster
 SMOOTH_ALPHA = 0.35
+
+# Anti-jitter buffering
+TRACK_LOST_HOLD_S = 0.35
+CMD_HOLD_MIN_S = 0.12
 
 
 
@@ -360,7 +370,15 @@ def main() -> None:
     cached_stale_frames = YOLO_MAX_STALE_FRAMES + 1
     last_turn_dir = 0
     lost_seek_started_at = None
+    lost_seek_turn_started_at = None
+    lost_seek_active_loops = 0
     lost_seek_dir = 0
+    lost_seek_basis = "last_error"
+    last_person_seen_at = None
+    last_motion_cmd = "MS"
+    last_decision_cmd = "MS"
+    last_decision_changed_at = time.time()
+    recent_target_x = deque(maxlen=LOST_DIR_AVG_FRAMES)
 
     print("Tracking started. YOLO forward-priority tracking active.")
     print(f"YOLO model: {YOLO_MODEL_NAME}")
@@ -430,10 +448,28 @@ def main() -> None:
                 smoothed_target_x = smooth_value(smoothed_target_x, target_x)
                 error = smoothed_target_x - CENTER_TARGET_X
                 last_error = error
+                recent_target_x.append(target_x)
                 cmd, state_text, last_turn_dir = choose_forward_priority_command(error, last_turn_dir)
+
+                if cmd != last_decision_cmd:
+                    decision_age = now - last_decision_changed_at
+                    if decision_age < CMD_HOLD_MIN_S:
+                        cmd = last_decision_cmd
+                        state_text = f"{state_text} (cmd hold)"
+                    else:
+                        last_decision_cmd = cmd
+                        last_decision_changed_at = now
+
+                last_person_seen_at = now
+                if cmd != "MS":
+                    last_motion_cmd = cmd
+
                 draw_target(frame, box, conf)
                 lost_seek_started_at = None
+                lost_seek_turn_started_at = None
+                lost_seek_active_loops = 0
                 lost_seek_dir = 0
+                lost_seek_basis = "tracking"
                 if not should_infer:
                     state_text = f"{state_text} (cached)"
             else:
@@ -441,24 +477,71 @@ def main() -> None:
                 if ENABLE_SEEK_TURN:
                     if lost_seek_started_at is None:
                         lost_seek_started_at = now
-                        lost_seek_dir = -1 if last_error < 0 else 1
+                        lost_seek_turn_started_at = None
 
-                    seek_elapsed = now - lost_seek_started_at
-                    if seek_elapsed <= SEEK_MAX_DURATION_S:
-                        if lost_seek_dir < 0:
-                            cmd = f"ML{SEEK_TURN_SPEED}"
-                            state_text = "lost -> seek left"
+                        avg_target_x = None
+                        if len(recent_target_x) > 0:
+                            avg_target_x = float(sum(recent_target_x) / len(recent_target_x))
+
+                        if (
+                            avg_target_x is not None
+                            and abs(avg_target_x - CENTER_TARGET_X) >= LOST_DIR_MIN_OFFSET
+                        ):
+                            lost_seek_dir = -1 if avg_target_x < CENTER_TARGET_X else 1
+                            lost_seek_basis = f"avg{len(recent_target_x)}={avg_target_x:.3f}"
                         else:
-                            cmd = f"MR{SEEK_TURN_SPEED}"
-                            state_text = "lost -> seek right"
-                        state_text = f"{state_text} ({seek_elapsed:.1f}s/{SEEK_MAX_DURATION_S:.1f}s)"
+                            lost_seek_dir = -1 if last_error < 0 else 1
+                            lost_seek_basis = f"last_error={last_error:.3f}"
+
+                    lost_elapsed = now - lost_seek_started_at
+                    if lost_elapsed < SEEK_START_DELAY_S:
+                        planned_dir = "left" if lost_seek_dir < 0 else "right"
+                        cmd = "MS"
+                        state_text = (
+                            f"lost -> wait before turn ({planned_dir}, {lost_seek_basis}) "
+                            f"({lost_elapsed:.1f}s/{SEEK_START_DELAY_S:.1f}s)"
+                        )
+                    else:
+                        if lost_seek_turn_started_at is None:
+                            lost_seek_turn_started_at = now
+                            lost_seek_active_loops = 0
+
+                        seek_elapsed = now - lost_seek_turn_started_at
+                        if seek_elapsed <= SEEK_MAX_DURATION_S or lost_seek_active_loops < SEEK_MIN_ACTIVE_LOOPS:
+                            if lost_seek_dir < 0:
+                                if SEEK_USE_NORMAL_TURN:
+                                    cmd = f"MG{SEEK_TURN_SPEED}"
+                                    state_text = "lost -> seek left (normal turn)"
+                                else:
+                                    cmd = f"ML{SEEK_TURN_SPEED}"
+                                    state_text = "lost -> seek left"
+                            else:
+                                if SEEK_USE_NORMAL_TURN:
+                                    cmd = f"MH{SEEK_TURN_SPEED}"
+                                    state_text = "lost -> seek right (normal turn)"
+                                else:
+                                    cmd = f"MR{SEEK_TURN_SPEED}"
+                                    state_text = "lost -> seek right"
+                            lost_seek_active_loops += 1
+                            state_text = f"{state_text} ({seek_elapsed:.1f}s/{SEEK_MAX_DURATION_S:.1f}s)"
+                        else:
+                            cmd = "MS"
+                            state_text = f"lost -> seek timeout -> stop (loops={lost_seek_active_loops})"
+                else:
+                    lost_for_s = None if last_person_seen_at is None else (now - last_person_seen_at)
+                    if (
+                        lost_for_s is not None
+                        and lost_for_s <= TRACK_LOST_HOLD_S
+                        and last_motion_cmd != "MS"
+                    ):
+                        cmd = last_motion_cmd
+                        state_text = f"lost -> hold last cmd ({lost_for_s:.2f}s)"
                     else:
                         cmd = "MS"
-                        state_text = "lost -> seek timeout -> stop"
-                else:
-                    cmd = "MS"
-                    state_text = "lost -> seek disabled -> stop"
+                        state_text = "lost -> seek disabled -> stop"
                     lost_seek_started_at = None
+                    lost_seek_turn_started_at = None
+                    lost_seek_active_loops = 0
                     lost_seek_dir = 0
                 last_turn_dir = 0
 
