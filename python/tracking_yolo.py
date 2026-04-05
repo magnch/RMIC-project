@@ -10,7 +10,7 @@ import requests
 from ultralytics import YOLO
 
 # --- CONFIG ---
-# BOT_IP = "10.104.31.108"
+
 BOT_IP = "172.20.10.6"
 
 # Forward-priority follow behavior

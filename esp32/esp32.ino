@@ -23,12 +23,9 @@
 #define HREF_GPIO_NUM 23
 #define PCLK_GPIO_NUM 22
 
-// const char *ssid = "MEO-49A3E0";
-// const char *password = "f18db6e514";
 
 const char *ssid = "iPhone";
-const char *password = "12345677";
-
+const char *password = "";
 
 
 

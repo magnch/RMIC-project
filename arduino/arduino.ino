@@ -1,17 +1,17 @@
 #include <Servo.h>
 
-// Motor-Pins
+// Motor pins
 const int IN1 = A0; const int IN2 = A1; const int ENA = 5;
 const int IN3 = A2; const int IN4 = A3; const int ENB = 6;
 
-// Ultrasonic sensor + servo
+// Ultrasonic sensor and servo
 const int trigPin = 11; const int echoPin = 12;
 Servo meinServo;
 int aktuellerWinkel = 90;
 
 // Motor ramp control
-const int RAMP_STEP = 3;  //Größer = schneller hoch/runter. Kleiner = weicher, aber träger.
-const int RAMP_INTERVAL_MS = 20; //Kleiner = häufiger Updates = schneller Reaktion.Größer = langsamer.
+const int RAMP_STEP = 3;  // Larger = faster ramp-up/down, smaller = smoother but slower response.
+const int RAMP_INTERVAL_MS = 20; // Smaller = more frequent updates and quicker response, larger = slower.
 const int START_KICK_PWM = 90;
 const int START_BOOST_MS = 20; 
 const bool ENABLE_START_KICK = true;
@@ -19,10 +19,10 @@ const bool ENABLE_START_KICK = true;
 
 
 
-const int AUTO_REKICK_MAX_CMD_PWM = 50; //threshold
+const int AUTO_REKICK_MAX_CMD_PWM = 50; // Threshold
 
-const int AUTO_REKICK_PWM = 90; //pwm
-const int AUTO_REKICK_INTERVAL_MS = 650; //intervalle
+const int AUTO_REKICK_PWM = 90; // PWM value
+const int AUTO_REKICK_INTERVAL_MS = 650; // Interval in milliseconds
 const bool ENABLE_AUTO_REKICK = false;
 
 
@@ -112,7 +112,7 @@ void loop() {
   stopIfCommandTimedOut();
   updateMotorRamp();
 
-  // Telemetry (send status back to the Mac every 300 ms)
+  // Telemetry (send status back to the host every 300 ms)
   static unsigned long timer = 0;
   if (millis() - timer > 300) {
     Serial.print("D:"); Serial.print(get_dist());
@@ -292,7 +292,7 @@ void updateMotorRamp() {
 
 float get_dist() {
   digitalWrite(trigPin, LOW); delayMicroseconds(2);
-  digitalWrite(trigPin, HIGH); delayMicroseconds(10); // 10us pulse
+  digitalWrite(trigPin, HIGH); delayMicroseconds(10); // 10 us pulse
   digitalWrite(trigPin, LOW);
-  return pulseIn(echoPin, HIGH) * 0.034 / 2.0; // Convert to cm
+  return pulseIn(echoPin, HIGH) * 0.034 / 2.0; // Convert to centimeters
 }
