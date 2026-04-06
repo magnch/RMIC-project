@@ -310,6 +310,8 @@ def main() -> None:
     last_tracking_cmd = "MS"
     last_follow_log_state = ""
     last_follow_log_cmd = ""
+    last_follow_log_pose = None
+    last_follow_log_online = None
     mode_profile = normalize_mode_profile(firebase_get(FIREBASE_CONTROL_MODE_PATH))
 
     print("Patrol Controller started (without camera access)")
@@ -407,7 +409,6 @@ def main() -> None:
             status_hold_s = active_hold_s
             status_distance_cm = last_distance
             if mode == "FOLLOW":
-                status_pose = False
                 status_hold_s = 0.0
                 status_distance_cm = None
 
@@ -422,10 +423,17 @@ def main() -> None:
                 tracking_online=tracking_online,
             )
 
-            if mode == "FOLLOW" and (state != last_follow_log_state or cmd != last_follow_log_cmd):
-                print(f"[patrol-follow] {state}")
+            if mode == "FOLLOW" and (
+                state != last_follow_log_state
+                or cmd != last_follow_log_cmd
+                or status_pose != last_follow_log_pose
+                or tracking_online != last_follow_log_online
+            ):
+                print(f"[patrol-follow] pose={status_pose} online={tracking_online} | {state}")
                 last_follow_log_state = state
                 last_follow_log_cmd = cmd
+                last_follow_log_pose = status_pose
+                last_follow_log_online = tracking_online
 
             if (now - last_firebase_write_at) >= FIREBASE_WRITE_INTERVAL_S:
                 publish_display_to_firebase(
